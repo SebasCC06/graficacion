@@ -1,0 +1,1843 @@
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+// ==================================================
+//                    ESCENA
+// ==================================================
+
+const escena = new THREE.Scene();
+escena.background = new THREE.Color(0x0f1420);
+
+// Cámara
+const camara = new THREE.PerspectiveCamera(
+  50, innerWidth / innerHeight, 0.1, 100
+);
+camara.position.set(6, 6, 12);
+
+// Renderizador
+const renderizador = new THREE.WebGLRenderer({ antialias: true });
+renderizador.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderizador.domElement);
+
+// Controles de cámara
+const controles = new OrbitControls(camara, renderizador.domElement);
+controles.target.set(0, 1.8, 0);
+
+// Luces
+escena.add(new THREE.AmbientLight(0xffffff, 0.8));
+
+const luz = new THREE.DirectionalLight(0xffffff, 2);
+luz.position.set(5, 10, 7);
+escena.add(luz);
+
+// Ejes y cuadrícula
+escena.add(new THREE.AxesHelper(5));
+escena.add(new THREE.GridHelper(20, 20, 0x55607a, 0x2a3348));
+
+// ==================================================
+//                 PANEL DE INFORMACIÓN
+// ==================================================
+
+const datos = {};
+const panel = document.getElementById('panel');
+
+// Guía de controles (aparece arriba en el panel)
+datos['Mover'] = 'Flechas · Shift = correr · Espacio = saltar · Q/E = girar';
+datos['Emotes'] = '1 Baile · 2 Amor · 3 Dormir · 4 Alegría · 5 Giro · 6 Oink';
+datos['Cámara'] = 'C = cambiar perspectiva';
+datos['Reiniciar'] = 'R';
+
+function vec(v) {
+  return `(${v.x.toFixed(1)}, ${v.y.toFixed(1)}, ${v.z.toFixed(1)})`;
+}
+
+const animaciones = [];
+const reloj = new THREE.Clock();
+
+// ==================================================
+//                    UTILIDADES
+// ==================================================
+
+// Crea un letrero de texto flotante
+function crearEtiqueta(texto, color, ancho, alto) {
+  const lienzo = document.createElement('canvas');
+  lienzo.width = 512;
+  lienzo.height = 128;
+
+  const ctx = lienzo.getContext('2d');
+  ctx.font = 'bold 80px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = color;
+  ctx.fillText(texto, 256, 64);
+
+  const sprite = new THREE.Sprite(
+    new THREE.SpriteMaterial({
+      map: new THREE.CanvasTexture(lienzo),
+      transparent: true
+    })
+  );
+  sprite.scale.set(ancho, alto, 1);
+  return sprite;
+}
+
+// Crea un símbolo suelto (corazón, nota, estrella...) para las partículas
+function crearGlifo(texto, color) {
+  const lienzo = document.createElement('canvas');
+  lienzo.width = 128;
+  lienzo.height = 128;
+
+  const ctx = lienzo.getContext('2d');
+  ctx.font = 'bold 100px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = color;
+  ctx.fillText(texto, 64, 68);
+
+  const sprite = new THREE.Sprite(
+    new THREE.SpriteMaterial({
+      map: new THREE.CanvasTexture(lienzo),
+      transparent: true,
+      depthWrite: false
+    })
+  );
+  sprite.scale.set(0.7, 0.7, 1);
+  return sprite;
+}
+
+// Diferencia más corta entre dos ángulos (en radianes)
+function difAngulo(desde, hasta) {
+  return ((hasta - desde + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
+}
+
+// ==================================================
+//                MATERIALES DEL CERDO
+// ==================================================
+
+const rosa = new THREE.MeshStandardMaterial({ color: 0xffa6c9 });
+const rosaOscuro = new THREE.MeshStandardMaterial({ color: 0xff7eb0 });
+const negro = new THREE.MeshStandardMaterial({ color: 0x111111 });
+const blanco = new THREE.MeshStandardMaterial({ color: 0xffffff });
+
+// ==================================================
+//                   CERDITO
+// ==================================================
+
+const robot = new THREE.Group();
+escena.add(robot);
+
+const pivote = new THREE.Group();
+pivote.position.y = 0.9;
+robot.add(pivote);
+
+const cerdo = new THREE.Group();
+pivote.add(cerdo);
+
+// Función para crear piezas
+function pieza(geometria, material, x, y, z, padre = cerdo) {
+  const malla = new THREE.Mesh(geometria, material);
+  malla.position.set(x, y, z);
+  padre.add(malla);
+  return malla;
+}
+
+// Cuerpo
+pieza(
+  new THREE.SphereGeometry(0.9, 32, 24),
+  rosa, 0, 0, 0
+);
+
+// Cabeza
+const cabeza = pieza(
+  new THREE.SphereGeometry(0.55, 24, 16),
+  rosa, 0, 0.25, 0.85
+);
+
+// Hocico
+const hocico = pieza(
+  new THREE.CylinderGeometry(0.22, 0.22, 0.2, 20),
+  rosaOscuro, 0, -0.05, 0.5, cabeza
+);
+hocico.rotation.x = Math.PI / 2;
+
+// Fosas nasales
+pieza(new THREE.SphereGeometry(0.04, 8, 8), negro, -0.08, -0.05, 0.61, cabeza);
+pieza(new THREE.SphereGeometry(0.04, 8, 8), negro, 0.08, -0.05, 0.61, cabeza);
+
+// Ojos
+pieza(new THREE.SphereGeometry(0.09, 12, 12), blanco, -0.2, 0.17, 0.42, cabeza);
+pieza(new THREE.SphereGeometry(0.09, 12, 12), blanco, 0.2, 0.17, 0.42, cabeza);
+
+// Pupilas
+pieza(new THREE.SphereGeometry(0.05, 12, 12), negro, -0.2, 0.17, 0.49, cabeza);
+pieza(new THREE.SphereGeometry(0.05, 12, 12), negro, 0.2, 0.17, 0.49, cabeza);
+
+// Orejas
+const orejaIzq = pieza(
+  new THREE.ConeGeometry(0.18, 0.3, 4),
+  rosaOscuro, -0.3, 0.5, 0.05, cabeza
+);
+orejaIzq.rotation.z = 0.5;
+
+const orejaDer = pieza(
+  new THREE.ConeGeometry(0.18, 0.3, 4),
+  rosaOscuro, 0.3, 0.5, 0.05, cabeza
+);
+orejaDer.rotation.z = -0.5;
+
+// Patas: cada una tiene su pivote arriba (en la cadera) para poder caminar
+function crearPata(x, z) {
+  const pivotePata = new THREE.Group();
+  pivotePata.position.set(x, -0.55, z);
+  cerdo.add(pivotePata);
+
+  const pata = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.15, 0.15, 0.4, 12),
+    rosaOscuro
+  );
+  pata.position.y = -0.2;
+  pivotePata.add(pata);
+
+  return pivotePata;
+}
+
+const pataDelIzq = crearPata(-0.4, 0.4);
+const pataDelDer = crearPata(0.4, 0.4);
+const pataTrasIzq = crearPata(-0.4, -0.4);
+const pataTrasDer = crearPata(0.4, -0.4);
+
+// Cola
+const cola = pieza(
+  new THREE.TorusGeometry(0.1, 0.03, 8, 16, Math.PI * 1.5),
+  rosaOscuro, 0, 0.1, -0.95
+);
+
+// Nombre flotante
+const NOMBRE = 'Cuchito';
+const etiqueta = crearEtiqueta(NOMBRE, '#ffffff', 2.5, 0.625);
+etiqueta.position.set(0, 2.3, 0);
+robot.add(etiqueta);
+
+// Burbuja de "¡Oink!" (solo visible durante ese emote)
+const burbuja = crearEtiqueta('¡OINK!', '#ffe066', 2.4, 0.6);
+burbuja.position.set(0, 3.1, 0);
+burbuja.visible = false;
+robot.add(burbuja);
+
+// ==================================================
+//                 PERSONAS (FÁBRICA)
+// ==================================================
+
+const piel = new THREE.MeshStandardMaterial({ color: 0xffc18b });
+const camisaBlanca = new THREE.MeshStandardMaterial({ color: 0xffffff });
+const camisaRoja = new THREE.MeshStandardMaterial({ color: 0xd62828 });
+const pantalonAzul = new THREE.MeshStandardMaterial({ color: 0x1e56c8 });
+const pantalonGris = new THREE.MeshStandardMaterial({ color: 0x555b66 });
+const zapatos = new THREE.MeshStandardMaterial({ color: 0x222222 });
+const cabello = new THREE.MeshStandardMaterial({ color: 0x38251c });
+
+// Brazo con pivote en el hombro (la mano queda en userData.mano)
+function crearExtremidad(padre, x, y, material, radio = 0.09, largo = 0.65) {
+  const pivoteBrazo = new THREE.Group();
+  pivoteBrazo.position.set(x, y, 0);
+  padre.add(pivoteBrazo);
+
+  const brazo = new THREE.Mesh(
+    new THREE.CylinderGeometry(radio, radio, largo, 12),
+    material
+  );
+  brazo.position.y = -largo / 2;
+  pivoteBrazo.add(brazo);
+
+  const mano = new THREE.Mesh(
+    new THREE.SphereGeometry(radio + 0.01, 12, 12),
+    piel
+  );
+  mano.position.y = -(largo + 0.03);
+  pivoteBrazo.add(mano);
+
+  pivoteBrazo.userData.mano = mano;
+  return pivoteBrazo;
+}
+
+// Pierna con pivote en la cadera
+function crearPierna(padre, x, material, radio = 0.11) {
+  const pivotePierna = new THREE.Group();
+  pivotePierna.position.set(x, 0.85, 0);
+  padre.add(pivotePierna);
+
+  const pierna = new THREE.Mesh(
+    new THREE.CylinderGeometry(radio, radio, 0.7, 12),
+    material
+  );
+  pierna.position.y = -0.35;
+  pivotePierna.add(pierna);
+
+  const zapato = new THREE.Mesh(
+    new THREE.BoxGeometry(radio * 2.1, 0.15, 0.35),
+    zapatos
+  );
+  zapato.position.set(0, -0.72, 0.1);
+  pivotePierna.add(zapato);
+
+  return pivotePierna;
+}
+
+function crearPersona({
+  camisa, pantalon, peinado, posicion, grosor = 1,
+  peloMat = cabello, nombre = null, colorNombre = '#ffffff'
+}) {
+  const rCabeza = 0.25 * (1 + (grosor - 1) * 0.2);
+  const grupo = new THREE.Group();
+  grupo.position.copy(posicion);
+  grupo.scale.setScalar(1.4);
+  escena.add(grupo);
+
+  // Cabeza
+  const cabezaP = new THREE.Mesh(new THREE.SphereGeometry(rCabeza, 20, 16), piel);
+  cabezaP.position.y = 1.85;
+  grupo.add(cabezaP);
+
+  if (peinado === 'largo') {
+    // Cabello: parte de arriba
+    const pelo = new THREE.Mesh(new THREE.SphereGeometry(0.27, 20, 12), peloMat);
+    pelo.position.set(0, 1.9, -0.04);
+    grupo.add(pelo);
+
+    // Cabello largo: cortina por la espalda
+    const peloLargo = new THREE.Mesh(new THREE.SphereGeometry(0.27, 20, 16), peloMat);
+    peloLargo.scale.set(1, 2.6, 0.55);
+    peloLargo.position.set(0, 1.55, -0.28);
+    grupo.add(peloLargo);
+
+    // Mechones a los lados de la cara
+    [-0.23, 0.23].forEach((x) => {
+      const mechon = new THREE.Mesh(new THREE.SphereGeometry(0.12, 12, 12), peloMat);
+      mechon.scale.set(1, 2.8, 1);
+      mechon.position.set(x, 1.62, -0.02);
+      grupo.add(mechon);
+    });
+  } else {
+    // Cabello corto, sin sombrero: casquete arriba y parte de atrás
+    const casquete = new THREE.Mesh(
+      new THREE.SphereGeometry(rCabeza * 1.08, 20, 12, 0, Math.PI * 2, 0, Math.PI * 0.4),
+      peloMat
+    );
+    casquete.position.set(0, 1.86, -0.02);
+    grupo.add(casquete);
+
+    const nuca = new THREE.Mesh(new THREE.SphereGeometry(rCabeza * 1.02, 20, 16), peloMat);
+    nuca.position.set(0, 1.84, -0.07);
+    grupo.add(nuca);
+  }
+
+  // Ojos
+  [-0.09, 0.09].forEach((x) => {
+    const ojo = new THREE.Mesh(new THREE.SphereGeometry(0.03, 8, 8), negro);
+    ojo.position.set(x * (rCabeza / 0.25), 1.88, rCabeza * 0.88);
+    grupo.add(ojo);
+  });
+
+  // Cuerpo
+  const g = grosor;
+
+  const cuerpo = new THREE.Mesh(new THREE.BoxGeometry(0.55 * g, 0.75, 0.35 * g), camisa);
+  cuerpo.position.y = 1.25;
+  grupo.add(cuerpo);
+
+  // Panza
+  if (g > 1) {
+    const panza = new THREE.Mesh(new THREE.SphereGeometry(0.5, 28, 20), camisa);
+    panza.scale.set(0.6 * g, 0.95, 0.6 * g);
+    panza.position.set(0, 1.08, 0.1);
+    grupo.add(panza);
+  }
+
+  // Extremidades más gruesas (y brazos más largos) según el grosor
+  const radioBrazo = 0.09 * (1 + (g - 1) * 0.5);
+  const largoBrazo = 0.65 * (1 + (g - 1) * 0.25);
+  const xHombro = 0.275 * g + 0.075;
+  const radioPierna = 0.11 + (g - 1) * 0.07;
+  const xPierna = 0.17 * (1 + (g - 1) * 0.8);
+
+  // Nombre flotante sobre la cabeza
+  if (nombre) {
+    const letrero = crearEtiqueta(nombre, colorNombre, 1.9, 0.475);
+    letrero.position.set(0, 2.7, 0);
+    grupo.add(letrero);
+  }
+
+  return {
+    grupo,
+    brazoIzq: crearExtremidad(grupo, -xHombro, 1.55, camisa, radioBrazo, largoBrazo),
+    brazoDer: crearExtremidad(grupo, xHombro, 1.55, camisa, radioBrazo, largoBrazo),
+    piernaIzq: crearPierna(grupo, -xPierna, pantalon, radioPierna),
+    piernaDer: crearPierna(grupo, xPierna, pantalon, radioPierna)
+  };
+}
+
+// Vaso que se pega a la mano derecha de alguien
+function crearVaso(brazo) {
+  const vaso = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.08, 0.065, 0.2, 12),
+    new THREE.MeshStandardMaterial({ color: 0xe8b630 })
+  );
+  vaso.position.set(0, -0.75, 0.06);
+  vaso.visible = false;
+  brazo.add(vaso);
+  return vaso;
+}
+
+// ==================================================
+//            LA MUCHACHA Y EL COMPRADOR
+// ==================================================
+
+const POSICION_INICIAL_PERSONA = new THREE.Vector3(-4, 0, 2);
+const POSICION_COMPRADOR = new THREE.Vector3(6, 0, -5);
+
+// Nombres flotantes (cámbialos aquí)
+const NOMBRE_MUCHACHA = 'Ingrid';
+const NOMBRE_COMPRADOR = 'EL Wakal';
+
+// Muchacha principal (la de blanco): la que persigue y atrapa a Chuleta
+const muchacha = crearPersona({
+  camisa: camisaBlanca,
+  pantalon: pantalonAzul,
+  peinado: 'largo',
+  posicion: POSICION_INICIAL_PERSONA,
+  nombre: NOMBRE_MUCHACHA,
+  colorNombre: '#a8d8ff'
+});
+const persona = muchacha.grupo;
+const { brazoIzq, brazoDer, piernaIzq, piernaDer } = muchacha;
+
+// El orden YXZ hace que la caída sea hacia adelante, sin importar hacia dónde mire
+persona.rotation.order = 'YXZ';
+
+const vendedor = crearPersona({
+  camisa: camisaRoja,
+  pantalon: pantalonGris,
+  peinado: 'corto',
+  posicion: POSICION_COMPRADOR,
+  grosor: 2.2, // mucho más gordo
+  nombre: NOMBRE_COMPRADOR,
+  colorNombre: '#ffd166'
+});
+const comprador = vendedor.grupo;
+// Mira hacia el centro de la escena mientras espera
+comprador.rotation.y = Math.atan2(-POSICION_COMPRADOR.x, -POSICION_COMPRADOR.z);
+
+// Muchachas de fondo, cada una con colores distintos (la de blanco es solo la principal)
+const EXTRAS = [
+  { camisa: 0xf4c430, pantalon: 0x6b3fa0, pelo: 0x1a1a1a, pos: [-8, 0, -2] },   // amarilla
+  { camisa: 0xe85d9a, pantalon: 0x2a2a2a, pelo: 0xd9a441, pos: [-1, 0, -7.5] }, // rosa
+  { camisa: 0x8e44ad, pantalon: 0xc9b99a, pelo: 0x7a2e1b, pos: [3, 0, 6.5] },   // morada
+  { camisa: 0x1abc9c, pantalon: 0x3b4a6b, pelo: 0x5a3825, pos: [8.5, 0, 2] }    // turquesa
+];
+
+const extras = EXTRAS.map((c) => {
+  const m = crearPersona({
+    camisa: new THREE.MeshStandardMaterial({ color: c.camisa }),
+    pantalon: new THREE.MeshStandardMaterial({ color: c.pantalon }),
+    peloMat: new THREE.MeshStandardMaterial({ color: c.pelo }),
+    peinado: 'largo',
+    posicion: new THREE.Vector3(...c.pos)
+  });
+  // Empiezan mirando hacia el centro de la escena
+  m.grupo.rotation.y = Math.atan2(-c.pos[0], -c.pos[2]);
+
+  // Letrero de enojo (solo se ve cuando la principal gana)
+  m.enojo = crearEtiqueta('¡Grr!', '#ff4d4d', 1.3, 0.325);
+  m.enojo.position.set(0, 2.6, 0);
+  m.enojo.visible = false;
+  m.grupo.add(m.enojo);
+  m.tEnojo = 0;
+
+  // Vaso para cuando se juntan a tomar
+  m.vaso = crearVaso(m.brazoDer);
+
+  return m;
+});
+
+// Billete de 300 pesos
+const billete = new THREE.Mesh(
+  new THREE.BoxGeometry(0.5, 0.02, 0.26),
+  new THREE.MeshStandardMaterial({ color: 0x3aa655 })
+);
+billete.visible = false;
+escena.add(billete);
+
+// Letrero que aparece al recibir el pago
+const etiquetaPago = crearEtiqueta('+$300 pesos', '#7dff9a', 3.2, 0.8);
+etiquetaPago.visible = false;
+escena.add(etiquetaPago);
+
+// ==================================================
+//             MESA, BEBIDAS Y VÓMITO
+// ==================================================
+
+const MESA = new THREE.Vector3(-6, 0, -6);
+const RADIO_SILLA = 1.7;
+const ALTURA_SENTADO = -0.69;
+
+const matMadera = new THREE.MeshStandardMaterial({ color: 0x7a4b2a });
+
+const mesa = new THREE.Mesh(new THREE.CylinderGeometry(1.0, 1.0, 0.08, 24), matMadera);
+mesa.position.set(MESA.x, 0.9, MESA.z);
+escena.add(mesa);
+
+const pataMesa = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 0.9, 12), matMadera);
+pataMesa.position.set(MESA.x, 0.45, MESA.z);
+escena.add(pataMesa);
+
+// 5 lugares: 4 para las amigas (extras) y el 4 es de Ingrid
+const SILLAS = [];
+for (let i = 0; i < 5; i++) {
+  const a = i * Math.PI * 2 / 5 + 0.6;
+  const sx = MESA.x + Math.sin(a) * RADIO_SILLA;
+  const sz = MESA.z + Math.cos(a) * RADIO_SILLA;
+
+  SILLAS.push({
+    pos: new THREE.Vector3(sx, 0, sz),
+    giro: Math.atan2(-Math.sin(a), -Math.cos(a)), // mira hacia la mesa
+    afuera: new THREE.Vector3(Math.sin(a), 0, Math.cos(a))
+  });
+
+  const banco = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.5, 16), matMadera);
+  banco.position.set(sx, 0.25, sz);
+  escena.add(banco);
+}
+
+const vasoIngrid = crearVaso(brazoDer);
+
+// Charco de vómito
+const charco = new THREE.Mesh(
+  new THREE.CircleGeometry(0.8, 24),
+  new THREE.MeshStandardMaterial({ color: 0x9ccc3a })
+);
+charco.rotation.x = -Math.PI / 2;
+charco.position.y = 0.02;
+charco.scale.setScalar(0.01);
+charco.visible = false;
+escena.add(charco);
+
+// Gotas de vómito
+const vomitos = [];
+const matVomito = new THREE.MeshStandardMaterial({ color: 0x9ccc3a });
+
+function lanzarVomito() {
+  const m = new THREE.Mesh(
+    new THREE.SphereGeometry(0.07 + Math.random() * 0.05, 8, 8),
+    matVomito
+  );
+  const fx = Math.sin(persona.rotation.y);
+  const fz = Math.cos(persona.rotation.y);
+  m.position.set(persona.position.x + fx * 1.6, 1.9, persona.position.z + fz * 1.6);
+  escena.add(m);
+
+  const v = 1.2 + Math.random();
+  vomitos.push({
+    m,
+    vx: fx * v + (Math.random() - 0.5) * 0.4,
+    vy: 0.5 + Math.random() * 0.8,
+    vz: fz * v + (Math.random() - 0.5) * 0.4
+  });
+}
+
+function actualizarVomitos(delta) {
+  for (let i = vomitos.length - 1; i >= 0; i--) {
+    const p = vomitos[i];
+    p.vy -= 9 * delta;
+    p.m.position.x += p.vx * delta;
+    p.m.position.y += p.vy * delta;
+    p.m.position.z += p.vz * delta;
+
+    if (p.m.position.y <= 0.05) {
+      escena.remove(p.m);
+      p.m.geometry.dispose();
+      vomitos.splice(i, 1);
+    }
+  }
+}
+
+// ==================================================
+//                 VARIABLES DE JUEGO
+// ==================================================
+
+let inicioBrinco = -10;
+const DURACION = 0.8;
+
+// Estados: espera → persigue → levanta → camina → entrega → paga → fin
+//          → va_mesa → bebe → mareada → vomita → avanza → cae → caida
+let estado = 'espera';
+let tEstado = 0;
+let elevacion = 0; // 0 = en el suelo, 1 = en brazos
+
+function cambiarEstado(nuevo) {
+  estado = nuevo;
+  tEstado = 0;
+}
+
+const capturado = () => estado !== 'espera' && estado !== 'persigue';
+
+const ESTADOS_BAR = ['va_mesa', 'bebe', 'mareada', 'vomita', 'avanza', 'cae', 'caida'];
+const enBar = () => ESTADOS_BAR.includes(estado);
+let baseAvance = 0;
+
+const VELOCIDAD_PERSONA = 3.5;
+const VELOCIDAD_CARGANDO = 2.6;
+const DISTANCIA_ATRAPAR = 1.8;
+const DISTANCIA_ENTREGA = 4.4; // separación entre muchacha y comprador al entregar
+
+// Chuleta en brazos: a la altura del pecho, delante de la persona
+const ALTURA_CARGADO = 1.0;
+const ADELANTE_CARGADO = 1.1;
+const ADELANTE_COMPRADOR = 2.1; // el comprador es muy ancho: sostiene a Chuleta más lejos
+const DISTANCIA_PAGO = 2.7;     // qué tan cerca se para la muchacha para cobrar
+const LADO_CERDO = 2.1;         // a qué distancia de su costado deja a Chuleta
+let tPago = 0;
+
+// Ángulos de brazos (rotación en X; negativo = hacia adelante)
+const BRAZOS_CARGANDO = -Math.PI * 0.35;
+const BRAZOS_EXTENDIDOS = -Math.PI * 0.5;
+
+let ultimoTiempo = 0;
+
+// ----- Movimiento de Chuleta -----
+const VEL_CERDO = 3.2;        // unidades por segundo al caminar
+const FACTOR_CORRER = 1.8;    // multiplicador con Shift (más rápido que la persona)
+const LIMITE = 9.5;           // borde de la cuadrícula
+
+const teclas = new Set();
+let vx = 0;
+let vz = 0;
+let fase = 0;                 // fase del ciclo de caminata
+let tumbado = 0;              // 0 = de pie, 1 = acostado (dormir)
+let ultimoCerdo = 0;
+
+// Punto delante de una persona
+function frente(p, distancia) {
+  return new THREE.Vector3(
+    p.position.x + Math.sin(p.rotation.y) * distancia,
+    0,
+    p.position.z + Math.cos(p.rotation.y) * distancia
+  );
+}
+
+// Acerca suavemente la rotación de un brazo/pierna a un ángulo
+function hacia(obj, objetivo, k) {
+  obj.rotation.x += (objetivo - obj.rotation.x) * k;
+}
+
+// Deja a Chuleta en el suelo, al costado del comprador
+function ponerCerdoAlLado(delta) {
+  const th = comprador.rotation.y;
+  const derecha = new THREE.Vector3(Math.cos(th), 0, -Math.sin(th));
+  const adelante = new THREE.Vector3(Math.sin(th), 0, Math.cos(th));
+
+  const objetivo = new THREE.Vector3()
+    .copy(comprador.position)
+    .addScaledVector(derecha, LADO_CERDO)
+    .addScaledVector(adelante, 0.3);
+
+  const kc = Math.min(delta * 4, 1);
+  robot.position.x += (objetivo.x - robot.position.x) * kc;
+  robot.position.z += (objetivo.z - robot.position.z) * kc;
+  robot.position.y += (0 - robot.position.y) * kc;
+
+  // Mira hacia donde mira el comprador (hacia la muchacha)
+  robot.rotation.y += difAngulo(robot.rotation.y, th) * kc;
+  pivote.rotation.x = 0;
+  pivote.rotation.z = 0;
+}
+
+// Coloca a Chuleta de forma rígida en brazos de alguien
+function colocarCerdo(pos, y, persona, t) {
+  robot.position.set(pos.x, y, pos.z);
+  robot.rotation.y = persona.rotation.y + Math.PI;
+  pivote.rotation.x = 0;
+  pivote.rotation.z = Math.sin(t * 12) * 0.08;
+}
+
+// ==================================================
+//                      EMOTES
+// ==================================================
+
+const EMOTES = {
+  baile:  { etiqueta: 'Baile',   duracion: 3.5 },
+  amor:   { etiqueta: 'Amor',    duracion: 2.8 },
+  dormir: { etiqueta: 'Dormir',  duracion: Infinity }, // dura hasta que se mueva
+  alegria:{ etiqueta: 'Alegría', duracion: 3.0 },
+  giro:   { etiqueta: 'Giro',    duracion: 1.3 },
+  oink:   { etiqueta: '¡Oink!',  duracion: 1.8 }
+};
+
+const TECLA_EMOTE = {
+  Digit1: 'baile',   Numpad1: 'baile',
+  Digit2: 'amor',    Numpad2: 'amor',
+  Digit3: 'dormir',  Numpad3: 'dormir',
+  Digit4: 'alegria', Numpad4: 'alegria',
+  Digit5: 'giro',    Numpad5: 'giro',
+  Digit6: 'oink',    Numpad6: 'oink'
+};
+
+let emote = null;
+let tEmote = 0;
+let baseGiro = 0;
+let proxParticula = 0;
+
+function iniciarEmote(nombre) {
+  if (capturado()) return;
+
+  // Presionar la misma tecla otra vez lo cancela
+  if (emote === nombre) {
+    cancelarEmote();
+    return;
+  }
+
+  emote = nombre;
+  tEmote = 0;
+  baseGiro = robot.rotation.y;
+  proxParticula = 0;
+}
+
+function cancelarEmote() {
+  emote = null;
+  burbuja.visible = false;
+}
+
+// Partículas flotantes (corazones, notas, estrellas, Z...)
+const particulas = [];
+
+function lanzarParticula(texto, color) {
+  const sprite = crearGlifo(texto, color);
+  sprite.position.set(
+    robot.position.x + (Math.random() - 0.5) * 0.8,
+    robot.position.y + 1.9,
+    robot.position.z + (Math.random() - 0.5) * 0.8
+  );
+  escena.add(sprite);
+
+  particulas.push({
+    sprite,
+    vida: 1.6,
+    vx: (Math.random() - 0.5) * 0.6,
+    vy: 0.9 + Math.random() * 0.5
+  });
+}
+
+function actualizarParticulas(delta) {
+  for (let i = particulas.length - 1; i >= 0; i--) {
+    const p = particulas[i];
+    p.vida -= delta;
+
+    if (p.vida <= 0) {
+      escena.remove(p.sprite);
+      p.sprite.material.map.dispose();
+      p.sprite.material.dispose();
+      particulas.splice(i, 1);
+      continue;
+    }
+
+    p.sprite.position.x += p.vx * delta;
+    p.sprite.position.y += p.vy * delta;
+    p.sprite.material.opacity = Math.min(p.vida / 0.6, 1);
+  }
+}
+
+// Lanza una partícula cada cierto intervalo
+function emitir(delta, intervalo, texto, color) {
+  proxParticula -= delta;
+  if (proxParticula <= 0) {
+    lanzarParticula(texto, color);
+    proxParticula = intervalo;
+  }
+}
+
+// ==================================================
+//                  CÁMARAS (tecla C)
+// ==================================================
+
+const VISTAS = ['Libre (órbita)', 'Seguir a Chuleta', 'Vista desde arriba', 'Primera persona (Chuleta)'];
+let vista = 0;
+
+const _destino = new THREE.Vector3();
+const _mirada = new THREE.Vector3();
+const miraSuave = new THREE.Vector3(0, 1.8, 0);
+
+function cambiarVista() {
+  vista = (vista + 1) % VISTAS.length;
+
+  if (vista === 0) {
+    // Volver a la órbita libre desde la posición inicial
+    camara.position.set(6, 6, 12);
+    controles.target.set(0, 1.8, 0);
+    controles.enabled = true;
+  } else {
+    controles.enabled = false;
+    miraSuave.copy(robot.position);
+  }
+}
+
+function actualizarCamara(delta) {
+  if (vista === 0) {
+    controles.update();
+    return;
+  }
+
+  const ry = robot.rotation.y;
+  const fx = Math.sin(ry);
+  const fz = Math.cos(ry);
+  const suave = Math.min(delta * 5, 1);
+
+  if (vista === 1) {
+    // Tercera persona: detrás y arriba de Chuleta
+    _destino.set(
+      robot.position.x - fx * 6,
+      robot.position.y + 3.5,
+      robot.position.z - fz * 6
+    );
+    camara.position.lerp(_destino, suave);
+
+    _mirada.set(robot.position.x, robot.position.y + 1, robot.position.z);
+    miraSuave.lerp(_mirada, suave * 1.5);
+    camara.lookAt(miraSuave);
+
+  } else if (vista === 2) {
+    // Cenital: toda la escena desde arriba
+    _destino.set(0, 24, 0.01);
+    camara.position.lerp(_destino, suave);
+
+    _mirada.set(0, 0, 0);
+    miraSuave.lerp(_mirada, suave * 1.5);
+    camara.lookAt(miraSuave);
+
+  } else if (vista === 3) {
+    // Primera persona: los ojos de Chuleta
+    camara.position.set(
+      robot.position.x + fx * 1.7,
+      robot.position.y + 1.4,
+      robot.position.z + fz * 1.7
+    );
+    camara.lookAt(
+      robot.position.x + fx * 6,
+      robot.position.y + 1.2,
+      robot.position.z + fz * 6
+    );
+  }
+}
+
+// ==================================================
+//                 CONTROLES DEL CERDO
+// ==================================================
+
+function reiniciar() {
+  cambiarEstado('espera');
+  elevacion = 0;
+
+  robot.position.set(0, 0, 0);
+  robot.rotation.set(0, 0, 0);
+  pivote.rotation.set(0, 0, 0);
+
+  vx = 0;
+  vz = 0;
+  tumbado = 0;
+  tPago = 0;
+  cancelarEmote();
+
+  persona.position.copy(POSICION_INICIAL_PERSONA);
+  persona.rotation.set(0, 0, 0);
+
+  comprador.position.copy(POSICION_COMPRADOR);
+  comprador.rotation.set(
+    0, Math.atan2(-POSICION_COMPRADOR.x, -POSICION_COMPRADOR.z), 0
+  );
+
+  [muchacha, vendedor].forEach((p) => {
+    p.brazoIzq.rotation.set(0, 0, 0);
+    p.brazoDer.rotation.set(0, 0, 0);
+    p.piernaIzq.rotation.set(0, 0, 0);
+    p.piernaDer.rotation.set(0, 0, 0);
+  });
+
+  billete.visible = false;
+  etiquetaPago.visible = false;
+
+  extras.forEach((m, i) => {
+    const c = EXTRAS[i];
+    m.grupo.position.set(c.pos[0], 0, c.pos[2]);
+    m.grupo.rotation.set(0, Math.atan2(-c.pos[0], -c.pos[2]), 0);
+    m.brazoIzq.rotation.set(0, 0, 0);
+    m.brazoDer.rotation.set(0, 0, 0);
+    m.piernaIzq.rotation.set(0, 0, 0);
+    m.piernaDer.rotation.set(0, 0, 0);
+    m.enojo.visible = false;
+    m.tEnojo = 0;
+    m.vaso.visible = false;
+  });
+
+  // Bar: vaso, charco y gotas de vómito
+  vasoIngrid.visible = false;
+  charco.visible = false;
+  charco.scale.setScalar(0.01);
+  vomitos.forEach((p) => {
+    escena.remove(p.m);
+    p.m.geometry.dispose();
+  });
+  vomitos.length = 0;
+}
+
+const TECLAS_BLOQUEADAS = new Set([
+  'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'
+]);
+
+addEventListener('keydown', (e) => {
+
+  // Reiniciar la escena
+  if (e.code === 'KeyR') {
+    reiniciar();
+    return;
+  }
+
+  // Cambiar perspectiva de la cámara
+  if (e.code === 'KeyC') {
+    if (!e.repeat) cambiarVista();
+    return;
+  }
+
+  // Evitar que las flechas / espacio muevan la página
+  if (TECLAS_BLOQUEADAS.has(e.code)) {
+    e.preventDefault();
+  }
+
+  // Si Chuleta fue atrapado ya no se puede mover
+  if (capturado()) return;
+
+  teclas.add(e.code);
+
+  // Emotes
+  if (TECLA_EMOTE[e.code] && !e.repeat) {
+    iniciarEmote(TECLA_EMOTE[e.code]);
+  }
+
+  // Salto
+  if (e.code === 'Space') {
+    const ahora = reloj.getElapsedTime();
+
+    if (ahora - inicioBrinco > DURACION) {
+      inicioBrinco = ahora;
+      cancelarEmote();
+    }
+  }
+
+});
+
+addEventListener('keyup', (e) => {
+  teclas.delete(e.code);
+});
+
+// Si la ventana pierde el foco, soltar todas las teclas
+addEventListener('blur', () => {
+  teclas.clear();
+});
+
+// ==================================================
+//                  ANIMACIÓN DEL CERDO
+// ==================================================
+
+animaciones.push((t) => {
+
+  const delta = Math.min(Math.max(t - ultimoCerdo, 0), 0.05);
+  ultimoCerdo = t;
+
+  actualizarParticulas(delta);
+
+  // ---------- Atrapado: la persona controla la posición ----------
+  if (capturado()) {
+    if (emote) cancelarEmote();
+
+    // Chuleta patalea mientras lo cargan; ya en el suelo solo mueve la cola
+    const cargado = estado === 'levanta' || estado === 'camina' || estado === 'entrega';
+    const pataleo = cargado ? Math.sin(t * 12) * 0.35 : 0;
+    pataDelIzq.rotation.x = pataleo;
+    pataDelDer.rotation.x = -pataleo;
+    pataTrasIzq.rotation.x = -pataleo;
+    pataTrasDer.rotation.x = pataleo;
+
+    cerdo.position.set(0, 0, 0);
+    cerdo.rotation.set(0, 0, 0);
+    cabeza.rotation.set(0, 0, 0);
+    pivote.position.y = 0.9;
+    pivote.scale.set(1, 1, 1);
+    cola.rotation.z = Math.sin(t * (cargado ? 12 : 7)) * 0.5;
+
+    vx = 0;
+    vz = 0;
+    tumbado = 0;
+    return;
+  }
+
+  // ---------- Entrada de teclado ----------
+  let ix = 0;
+  let iz = 0;
+  if (teclas.has('ArrowRight')) ix += 1;
+  if (teclas.has('ArrowLeft')) ix -= 1;
+  if (teclas.has('ArrowDown')) iz += 1;
+  if (teclas.has('ArrowUp')) iz -= 1;
+
+  const hayMovimiento = ix !== 0 || iz !== 0;
+
+  // Moverse cancela cualquier emote
+  if (hayMovimiento && emote) cancelarEmote();
+
+  // ---------- Velocidad con aceleración suave ----------
+  const correr = teclas.has('ShiftLeft') || teclas.has('ShiftRight');
+  const vMax = VEL_CERDO * (correr ? FACTOR_CORRER : 1);
+
+  let objX = 0;
+  let objZ = 0;
+  if (hayMovimiento) {
+    const largo = Math.hypot(ix, iz);
+    objX = (ix / largo) * vMax;
+    objZ = (iz / largo) * vMax;
+  }
+
+  const kv = Math.min(delta * (hayMovimiento ? 7 : 10), 1);
+  vx += (objX - vx) * kv;
+  vz += (objZ - vz) * kv;
+
+  robot.position.x = THREE.MathUtils.clamp(robot.position.x + vx * delta, -LIMITE, LIMITE);
+  robot.position.z = THREE.MathUtils.clamp(robot.position.z + vz * delta, -LIMITE, LIMITE);
+
+  const velocidad = Math.hypot(vx, vz);
+
+  // La persona empieza a perseguir cuando Chuleta se mueve
+  if (velocidad > 0.3 && estado === 'espera') {
+    cambiarEstado('persigue');
+  }
+
+  // ---------- Orientación: gira suavemente hacia donde camina ----------
+  if (!emote) {
+    if (velocidad > 0.3) {
+      const objetivo = Math.atan2(vx, vz);
+      robot.rotation.y += difAngulo(robot.rotation.y, objetivo) * Math.min(delta * 10, 1);
+    }
+
+    // Giro manual con Q / E
+    if (teclas.has('KeyQ')) robot.rotation.y += 2.8 * delta;
+    if (teclas.has('KeyE')) robot.rotation.y -= 2.8 * delta;
+  }
+
+  // ---------- Ciclo de caminata ----------
+  fase += delta * velocidad * 2.8;
+  const amp = Math.min(velocidad / VEL_CERDO, 1.8); // 0 quieto, 1 caminando, ~1.8 corriendo
+  const bal = Math.sin(fase);
+  const paso = 0.55 * amp;
+
+  // Patas en diagonal (trote): delantera izq + trasera der, y al revés
+  pataDelIzq.rotation.x = bal * paso;
+  pataTrasDer.rotation.x = bal * paso;
+  pataDelDer.rotation.x = -bal * paso;
+  pataTrasIzq.rotation.x = -bal * paso;
+
+  // Cuerpo: rebote, balanceo lateral y contoneo
+  cerdo.position.set(0, Math.abs(bal) * 0.07 * amp, 0);
+  cerdo.rotation.z = bal * 0.06 * amp;
+  cerdo.rotation.x = Math.sin(fase * 2) * 0.025 * amp;
+  cerdo.rotation.y = bal * 0.05 * amp;
+
+  // Cabeza, orejas y cola
+  cabeza.rotation.x = Math.sin(fase * 2) * 0.06 * amp;
+  cabeza.rotation.y = 0.2 * Math.sin(t * 2) * (1 - Math.min(amp, 1)) - bal * 0.08 * amp;
+  cabeza.rotation.z = 0;
+
+  orejaIzq.rotation.z = 0.5 + Math.sin(fase * 2 + 1) * 0.18 * amp;
+  orejaDer.rotation.z = -0.5 - Math.sin(fase * 2 + 1) * 0.18 * amp;
+
+  cola.rotation.z = Math.sin(t * 5) * 0.35;
+
+  pivote.position.y = 0.9;
+  pivote.scale.set(1, 1, 1);
+  robot.position.y = 0;
+
+  // ---------- Salto con vuelta ----------
+  const s = t - inicioBrinco;
+  const saltando = s >= 0 && s < DURACION;
+
+  if (saltando) {
+    const p = Math.min(Math.max(s / DURACION, 0), 1);
+
+    robot.position.y = Math.sin(p * Math.PI) * 2;
+    pivote.rotation.x = -p * Math.PI * 2;
+
+    // Patas recogidas en el aire
+    const recoger = Math.sin(p * Math.PI) * 0.8;
+    pataDelIzq.rotation.x = recoger;
+    pataDelDer.rotation.x = recoger;
+    pataTrasIzq.rotation.x = -recoger;
+    pataTrasDer.rotation.x = -recoger;
+  } else {
+    pivote.rotation.x = 0;
+  }
+
+  // ---------- Emotes ----------
+  if (emote && !saltando) {
+    tEmote += delta;
+    const te = tEmote;
+    const def = EMOTES[emote];
+
+    if (te > def.duracion) {
+      cancelarEmote();
+    } else {
+      switch (emote) {
+
+        case 'baile': {
+          const w = Math.sin(te * 9);
+          cerdo.rotation.y = w * 0.6;
+          cerdo.rotation.z = Math.sin(te * 4.5) * 0.15;
+          robot.position.y = Math.abs(Math.sin(te * 4.5)) * 0.25;
+
+          pataDelIzq.rotation.x = w * 0.6;
+          pataTrasDer.rotation.x = w * 0.6;
+          pataDelDer.rotation.x = -w * 0.6;
+          pataTrasIzq.rotation.x = -w * 0.6;
+
+          cabeza.rotation.z = w * 0.25;
+          orejaIzq.rotation.z = 0.5 + w * 0.3;
+          orejaDer.rotation.z = -0.5 + w * 0.3;
+          cola.rotation.z = Math.sin(te * 14) * 0.6;
+
+          emitir(delta, 0.4, Math.random() > 0.5 ? '♪' : '♫', '#9ad1ff');
+          break;
+        }
+
+        case 'amor': {
+          const latido = Math.sin(te * 8);
+          pivote.scale.setScalar(1 + 0.05 * latido);
+          robot.position.y = Math.abs(Math.sin(te * 3)) * 0.1;
+
+          cabeza.rotation.x = -0.15;
+          cabeza.rotation.z = Math.sin(te * 3) * 0.2;
+          cola.rotation.z = Math.sin(te * 16) * 0.7;
+
+          emitir(delta, 0.25, '❤', '#ff4d79');
+          break;
+        }
+
+        case 'dormir': {
+          // Respiración lenta
+          const resp = Math.sin(te * 2.2);
+          pivote.scale.set(1 + resp * 0.03, 1 + resp * 0.03, 1 + resp * 0.03);
+
+          cabeza.rotation.x = 0.25;
+          cola.rotation.z = Math.sin(te * 1.2) * 0.1;
+
+          emitir(delta, 0.9, 'Z', '#cfe3ff');
+          break;
+        }
+
+        case 'alegria': {
+          const h = Math.abs(Math.sin(te * 8));
+          robot.position.y = h * 0.9;
+
+          // Aplastamiento al caer
+          const aplasta = 1 - h;
+          pivote.scale.set(1 + 0.1 * aplasta, 1 - 0.1 * aplasta, 1 + 0.1 * aplasta);
+
+          pataDelIzq.rotation.x = -h * 0.9;
+          pataDelDer.rotation.x = -h * 0.9;
+          pataTrasIzq.rotation.x = h * 0.5;
+          pataTrasDer.rotation.x = h * 0.5;
+
+          orejaIzq.rotation.z = 0.5 + Math.sin(te * 16) * 0.4;
+          orejaDer.rotation.z = -0.5 - Math.sin(te * 16) * 0.4;
+          cola.rotation.z = Math.sin(te * 20) * 0.7;
+
+          emitir(delta, 0.2, '★', '#ffd84d');
+          break;
+        }
+
+        case 'giro': {
+          const u = Math.min(te / def.duracion, 1);
+          const suave = u * u * (3 - 2 * u);
+
+          // Dos vueltas completas con un saltito
+          robot.rotation.y = baseGiro + suave * Math.PI * 4;
+          robot.position.y = Math.sin(u * Math.PI) * 0.7;
+
+          const recoger = Math.sin(u * Math.PI) * 0.7;
+          pataDelIzq.rotation.x = recoger;
+          pataDelDer.rotation.x = recoger;
+          pataTrasIzq.rotation.x = -recoger;
+          pataTrasDer.rotation.x = -recoger;
+
+          cola.rotation.z = Math.sin(te * 18) * 0.6;
+
+          emitir(delta, 0.15, '✦', '#ffffff');
+          break;
+        }
+
+        case 'oink': {
+          burbuja.visible = true;
+          const pop = Math.min(te / 0.15, 1);
+          burbuja.scale.set(2.4 * pop, 0.6 * pop, 1);
+          burbuja.position.y = 3.1 + Math.sin(te * 6) * 0.05;
+
+          // Cabeza arriba como cantando "¡oink!"
+          cabeza.rotation.x = -0.35 * Math.abs(Math.sin(te * 9));
+          cerdo.rotation.x = -0.05 * Math.abs(Math.sin(te * 9));
+          cola.rotation.z = Math.sin(te * 12) * 0.6;
+          break;
+        }
+      }
+    }
+  }
+
+  // ---------- Acostarse / levantarse suavemente ----------
+  const objetivoTumbado = emote === 'dormir' ? 1 : 0;
+  tumbado += (objetivoTumbado - tumbado) * Math.min(delta * 4, 1);
+  pivote.rotation.z = tumbado * (Math.PI / 2);
+
+  // ---------- Información en pantalla ----------
+  datos['Traslación'] = vec(robot.position);
+
+  datos['Rotación Y'] =
+    `${THREE.MathUtils.radToDeg(robot.rotation.y).toFixed(1)}°`;
+
+  datos['Velocidad'] = velocidad.toFixed(1) + ' m/s' + (correr && hayMovimiento ? ' (corriendo)' : '');
+  datos['Emote'] = emote ? EMOTES[emote].etiqueta : '—';
+
+});
+
+// ==================================================
+//   PERSECUCIÓN, CAPTURA, ENTREGA, PAGO Y FIESTA
+// ==================================================
+
+const _manoA = new THREE.Vector3();
+const _manoB = new THREE.Vector3();
+
+animaciones.push((t) => {
+
+  // Tiempo entre fotogramas
+  const delta = Math.min(Math.max(t - ultimoTiempo, 0), 0.05);
+  ultimoTiempo = t;
+  tEstado += delta;
+
+  actualizarVomitos(delta);
+
+  // Chuleta se queda junto al comprador mientras Ingrid está de fiesta
+  if (enBar()) ponerCerdoAlLado(delta);
+
+  const k = Math.min(delta * 8, 1);
+
+  // Distancia entre la muchacha y Chuleta
+  const dx = robot.position.x - persona.position.x;
+  const dz = robot.position.z - persona.position.z;
+  const distancia = Math.sqrt(dx * dx + dz * dz);
+
+  switch (estado) {
+
+    // ---------- Esperando ----------
+    case 'espera': {
+      piernaIzq.rotation.x = 0;
+      piernaDer.rotation.x = 0;
+      brazoIzq.rotation.x = 0;
+      brazoDer.rotation.x = 0;
+      persona.position.y = 0;
+      break;
+    }
+
+    // ---------- Persiguiendo ----------
+    case 'persigue': {
+      if (distancia > DISTANCIA_ATRAPAR) {
+
+        persona.position.x += (dx / distancia) * VELOCIDAD_PERSONA * delta;
+        persona.position.z += (dz / distancia) * VELOCIDAD_PERSONA * delta;
+        persona.rotation.y = Math.atan2(dx, dz);
+
+        const carrera = Math.sin(t * 14);
+        piernaIzq.rotation.x = carrera * 0.9;
+        piernaDer.rotation.x = -carrera * 0.9;
+        brazoIzq.rotation.x = -carrera * 0.8;
+        brazoDer.rotation.x = carrera * 0.8;
+        persona.position.y = Math.abs(carrera) * 0.08;
+
+      } else {
+        // Llegó hasta Chuleta: lo atrapa
+        persona.rotation.y = Math.atan2(dx, dz);
+        cambiarEstado('levanta');
+      }
+      break;
+    }
+
+    // ---------- Lo levanta (solo hasta el pecho) ----------
+    case 'levanta': {
+      elevacion = Math.min(elevacion + delta * 1.5, 1);
+      const suave = elevacion * elevacion * (3 - 2 * elevacion);
+
+      persona.position.y = 0;
+      hacia(piernaIzq, 0, k);
+      hacia(piernaDer, 0, k);
+      hacia(brazoIzq, BRAZOS_CARGANDO * suave, k);
+      hacia(brazoDer, BRAZOS_CARGANDO * suave, k);
+
+      const f = frente(persona, ADELANTE_CARGADO * suave);
+      const kc = Math.min(delta * 10, 1);
+      robot.position.x += (f.x - robot.position.x) * kc;
+      robot.position.z += (f.z - robot.position.z) * kc;
+      robot.position.y = ALTURA_CARGADO * suave;
+
+      // Chuleta mira a la persona y patalea un poco
+      robot.rotation.y = persona.rotation.y + Math.PI;
+      pivote.rotation.x = 0;
+      pivote.rotation.z = Math.sin(t * 12) * 0.15 * suave;
+
+      if (elevacion >= 1) cambiarEstado('camina');
+      break;
+    }
+
+    // ---------- Camina hacia el comprador cargando a Chuleta ----------
+    case 'camina': {
+      const bx = comprador.position.x - persona.position.x;
+      const bz = comprador.position.z - persona.position.z;
+      const d = Math.sqrt(bx * bx + bz * bz);
+
+      persona.rotation.y = Math.atan2(bx, bz);
+      // El comprador se voltea hacia ella
+      comprador.rotation.y = Math.atan2(-bx, -bz);
+
+      hacia(brazoIzq, BRAZOS_CARGANDO, k);
+      hacia(brazoDer, BRAZOS_CARGANDO, k);
+
+      if (d > DISTANCIA_ENTREGA) {
+        persona.position.x += (bx / d) * VELOCIDAD_CARGANDO * delta;
+        persona.position.z += (bz / d) * VELOCIDAD_CARGANDO * delta;
+
+        const paso = Math.sin(t * 10);
+        piernaIzq.rotation.x = paso * 0.6;
+        piernaDer.rotation.x = -paso * 0.6;
+        persona.position.y = Math.abs(paso) * 0.05;
+      } else {
+        piernaIzq.rotation.x = 0;
+        piernaDer.rotation.x = 0;
+        persona.position.y = 0;
+        cambiarEstado('entrega');
+      }
+
+      colocarCerdo(
+        frente(persona, ADELANTE_CARGADO),
+        ALTURA_CARGADO + persona.position.y,
+        persona,
+        t
+      );
+      break;
+    }
+
+    // ---------- Le entrega a Chuleta al comprador ----------
+    case 'entrega': {
+      const e = Math.min(tEstado / 1.2, 1);
+      const suave = e * e * (3 - 2 * e);
+
+      hacia(brazoIzq, BRAZOS_CARGANDO, k);
+      hacia(brazoDer, BRAZOS_CARGANDO, k);
+      hacia(vendedor.brazoIzq, BRAZOS_CARGANDO, k);
+      hacia(vendedor.brazoDer, BRAZOS_CARGANDO, k);
+
+      const origen = frente(persona, ADELANTE_CARGADO);
+      const destino = frente(comprador, ADELANTE_COMPRADOR);
+      const pos = origen.lerp(destino, suave);
+
+      robot.position.set(pos.x, ALTURA_CARGADO + Math.sin(suave * Math.PI) * 0.2, pos.z);
+      robot.rotation.y = comprador.rotation.y + Math.PI;
+      pivote.rotation.x = 0;
+      pivote.rotation.z = Math.sin(t * 12) * 0.08;
+
+      if (e >= 1) {
+        tPago = 0;
+        cambiarEstado('paga');
+      }
+      break;
+    }
+
+    // ---------- El comprador paga 300 pesos ----------
+    case 'paga': {
+      const bx = comprador.position.x - persona.position.x;
+      const bz = comprador.position.z - persona.position.z;
+      const d = Math.sqrt(bx * bx + bz * bz);
+
+      persona.rotation.y = Math.atan2(bx, bz);
+      comprador.rotation.y = Math.atan2(-bx, -bz);
+
+      // Suelta a Chuleta en el suelo, a su costado
+      ponerCerdoAlLado(delta);
+      hacia(vendedor.brazoIzq, 0, k);
+
+      // Un momento para que Chuleta se quite del camino
+      if (tEstado < 0.8) {
+        hacia(vendedor.brazoDer, 0, k);
+        hacia(brazoIzq, 0, k);
+        hacia(brazoDer, 0, k);
+        break;
+      }
+
+      // La muchacha se acerca para cobrar
+      if (d > DISTANCIA_PAGO) {
+        persona.position.x += (bx / d) * 2.2 * delta;
+        persona.position.z += (bz / d) * 2.2 * delta;
+
+        const paso = Math.sin(t * 10);
+        piernaIzq.rotation.x = paso * 0.6;
+        piernaDer.rotation.x = -paso * 0.6;
+        persona.position.y = Math.abs(paso) * 0.05;
+
+        hacia(vendedor.brazoDer, 0, k);
+        hacia(brazoIzq, 0, k);
+        hacia(brazoDer, 0, k);
+        break;
+      }
+
+      // Ya está frente a él: se estira el brazo con el billete
+      hacia(piernaIzq, 0, k);
+      hacia(piernaDer, 0, k);
+      persona.position.y = 0;
+
+      tPago += delta;
+      const p = Math.min(tPago / 1.8, 1);
+
+      hacia(vendedor.brazoDer, BRAZOS_EXTENDIDOS, k);
+      hacia(brazoIzq, BRAZOS_EXTENDIDOS, k);
+      hacia(brazoDer, 0, k);
+
+      vendedor.brazoDer.userData.mano.getWorldPosition(_manoA);
+      brazoIzq.userData.mano.getWorldPosition(_manoB);
+
+      const q = Math.min(Math.max((p - 0.4) / 0.5, 0), 1);
+      const qs = q * q * (3 - 2 * q);
+
+      billete.visible = true;
+      billete.position.lerpVectors(_manoA, _manoB, qs);
+      billete.position.y += Math.sin(qs * Math.PI) * 0.15;
+      billete.rotation.y = comprador.rotation.y;
+
+      if (p >= 1) cambiarEstado('fin');
+      break;
+    }
+
+    // ---------- Fin del pago: la muchacha celebra ----------
+    case 'fin': {
+      ponerCerdoAlLado(delta);
+
+      hacia(vendedor.brazoIzq, 0, k);
+      hacia(vendedor.brazoDer, 0, k);
+
+      // Saltitos de alegría y un brazo en alto
+      persona.position.y = Math.abs(Math.sin(t * 6)) * 0.15;
+      brazoDer.rotation.x = -Math.PI * 0.8 + Math.sin(t * 10) * 0.2;
+      hacia(brazoIzq, BRAZOS_EXTENDIDOS, k);
+
+      // El billete se queda en su mano
+      brazoIzq.userData.mano.getWorldPosition(billete.position);
+      billete.position.y += 0.08;
+
+      etiquetaPago.visible = true;
+      etiquetaPago.position.set(
+        persona.position.x,
+        persona.position.y + 4.7,
+        persona.position.z
+      );
+
+      // Después de celebrar, se va con sus amigas
+      if (tEstado > 3) {
+        etiquetaPago.visible = false;
+        billete.visible = false;
+        vasoIngrid.visible = true;
+        cambiarEstado('va_mesa');
+      }
+      break;
+    }
+
+    // ---------- Camina a la mesa y se sienta ----------
+    case 'va_mesa': {
+      const silla = SILLAS[4];
+      const bx = silla.pos.x - persona.position.x;
+      const bz = silla.pos.z - persona.position.z;
+      const d = Math.hypot(bx, bz);
+
+      hacia(brazoIzq, 0, k);
+      hacia(brazoDer, -0.3, k);
+
+      if (d > 0.15) {
+        persona.rotation.y = Math.atan2(bx, bz);
+        const paso = Math.min(VELOCIDAD_PERSONA * 0.8 * delta, d);
+        persona.position.x += (bx / d) * paso;
+        persona.position.z += (bz / d) * paso;
+
+        const p = Math.sin(t * 10);
+        piernaIzq.rotation.x = p * 0.6;
+        piernaDer.rotation.x = -p * 0.6;
+        persona.position.y = Math.abs(p) * 0.05;
+      } else {
+        persona.position.x = silla.pos.x;
+        persona.position.z = silla.pos.z;
+        persona.rotation.y += difAngulo(persona.rotation.y, silla.giro) * k;
+        hacia(piernaIzq, -Math.PI / 2, k);
+        hacia(piernaDer, -Math.PI / 2, k);
+        persona.position.y += (ALTURA_SENTADO - persona.position.y) * k;
+
+        if (persona.position.y < ALTURA_SENTADO + 0.05) cambiarEstado('bebe');
+      }
+      break;
+    }
+
+    // ---------- Toma con sus amigas ----------
+    case 'bebe': {
+      persona.position.y = ALTURA_SENTADO;
+      const sorbo = Math.max(0, Math.sin(tEstado * 2.8));
+      hacia(brazoDer, -Math.PI * 0.2 - sorbo * Math.PI * 0.5, k);
+      hacia(brazoIzq, -0.3, k);
+
+      // Se va balanceando cada vez más
+      persona.rotation.z = Math.sin(t * 1.5) * 0.03 * Math.min(tEstado / 6, 1);
+
+      if (tEstado > 7) cambiarEstado('mareada');
+      break;
+    }
+
+    // ---------- Se levanta muy mareada ----------
+    case 'mareada': {
+      const silla = SILLAS[4];
+      const fuera = silla.pos.clone().addScaledVector(silla.afuera, 1.0);
+
+      persona.position.x += (fuera.x - persona.position.x) * k * 0.5;
+      persona.position.z += (fuera.z - persona.position.z) * k * 0.5;
+      persona.position.y += (0 - persona.position.y) * k;
+
+      // Se voltea hacia afuera de la mesa
+      persona.rotation.y += difAngulo(persona.rotation.y, silla.giro + Math.PI) * k * 0.5;
+
+      hacia(piernaIzq, 0, k);
+      hacia(piernaDer, 0, k);
+
+      const mareo = Math.min(tEstado / 1.5, 1);
+      persona.rotation.z = Math.sin(t * 2.2) * 0.18 * mareo;
+      persona.rotation.x = Math.sin(t * 1.7 + 1) * 0.1 * mareo;
+      brazoIzq.rotation.x = Math.sin(t * 2.2) * 0.4;
+      brazoDer.rotation.x = -Math.sin(t * 2.2 + 1) * 0.4;
+
+      if (tEstado > 3) {
+        vasoIngrid.visible = false;
+        const f = frente(persona, 3.0);
+        charco.position.set(f.x, 0.02, f.z);
+        charco.scale.setScalar(0.01);
+        charco.visible = true;
+        proxParticula = 0;
+        cambiarEstado('vomita');
+      }
+      break;
+    }
+
+    // ---------- Vomita ----------
+    case 'vomita': {
+      persona.rotation.x += (0.7 - persona.rotation.x) * k;
+      persona.rotation.z = Math.sin(t * 25) * 0.03;
+      hacia(brazoIzq, -0.9, k);
+      hacia(brazoDer, -0.9, k);
+
+      if (tEstado > 0.5 && tEstado < 2.2) {
+        proxParticula -= delta;
+        if (proxParticula <= 0) {
+          lanzarVomito();
+          proxParticula = 0.07;
+        }
+        const c = Math.min(charco.scale.x + delta * 0.7, 1);
+        charco.scale.setScalar(c);
+      }
+
+      if (tEstado > 2.8) {
+        baseAvance = persona.rotation.y;
+        cambiarEstado('avanza');
+      }
+      break;
+    }
+
+    // ---------- Avanza tambaleándose ----------
+    case 'avanza': {
+      persona.rotation.x += (0 - persona.rotation.x) * k;
+      persona.rotation.y = baseAvance + Math.sin(t * 2.3) * 0.5;
+      persona.rotation.z = Math.sin(t * 3) * 0.12;
+
+      persona.position.x += Math.sin(persona.rotation.y) * 1.1 * delta;
+      persona.position.z += Math.cos(persona.rotation.y) * 1.1 * delta;
+
+      const p = Math.sin(t * 6);
+      piernaIzq.rotation.x = p * 0.5;
+      piernaDer.rotation.x = -p * 0.5;
+      brazoIzq.rotation.x = Math.sin(t * 3) * 0.7;
+      brazoDer.rotation.x = -Math.sin(t * 3) * 0.7;
+      persona.position.y = Math.abs(p) * 0.04;
+
+      if (tEstado > 3.5) cambiarEstado('cae');
+      break;
+    }
+
+    // ---------- Se cae de frente ----------
+    case 'cae': {
+      const u = Math.min(tEstado / 0.9, 1);
+      const caida = u * u;
+
+      persona.rotation.x = caida * (Math.PI / 2);
+      persona.rotation.z += (0 - persona.rotation.z) * k;
+      persona.position.y = caida * 0.35;
+      persona.position.x += Math.sin(persona.rotation.y) * (1 - u) * 0.8 * delta;
+      persona.position.z += Math.cos(persona.rotation.y) * (1 - u) * 0.8 * delta;
+
+      hacia(brazoIzq, -Math.PI * 0.6, k);
+      hacia(brazoDer, -Math.PI * 0.6, k);
+      hacia(piernaIzq, 0, k);
+      hacia(piernaDer, 0, k);
+
+      if (u >= 1) cambiarEstado('caida');
+      break;
+    }
+
+    // ---------- Tirada en el suelo ----------
+    case 'caida': {
+      persona.rotation.x = Math.PI / 2;
+      persona.position.y = 0.35;
+      break;
+    }
+  }
+
+  // Información en pantalla
+  if (capturado()) {
+    datos['Traslación'] = vec(robot.position);
+    datos['Rotación Y'] =
+      `${THREE.MathUtils.radToDeg(robot.rotation.y).toFixed(1)}°`;
+    datos['Velocidad'] = '0.0 m/s';
+    datos['Emote'] = '—';
+  }
+
+  const textos = {
+    espera: 'Esperando movimiento',
+    persigue: 'Persiguiendo a Chuleta',
+    levanta: '¡Atrapó a Chuleta!',
+    camina: 'Llevando a Chuleta con el comprador',
+    entrega: 'Entregando a Chuleta',
+    paga: 'El comprador está pagando...',
+    fin: '¡Recibió $300 pesos!',
+    va_mesa: 'Ingrid va a la mesa con sus amigas',
+    bebe: 'Ingrid está tomando...',
+    mareada: 'Ingrid se levantó muy mareada',
+    vomita: 'Ingrid está vomitando...',
+    avanza: 'Ingrid camina tambaleándose',
+    cae: '¡Ingrid se cae!',
+    caida: 'Ingrid está tirada (R para reiniciar)'
+  };
+  datos['Estado'] = textos[estado];
+  datos['Distancia'] = distancia.toFixed(2) + ' metros';
+  datos['Vista'] = VISTAS[vista];
+
+});
+
+// ==================================================
+//     MUCHACHAS DE FONDO: persiguen, se enojan y toman
+// ==================================================
+
+// Se quedan un poco más lejos que la principal: solo ella puede atrapar a Chuleta
+const DISTANCIA_EXTRA = 2.6;
+
+// Evita que las muchachas se encimen unas con otras
+function separar(g) {
+  [persona, ...extras.map((e) => e.grupo)].forEach((otro) => {
+    if (otro === g) return;
+
+    const ox = g.position.x - otro.position.x;
+    const oz = g.position.z - otro.position.z;
+    const dd = Math.sqrt(ox * ox + oz * oz);
+
+    if (dd < 1.4 && dd > 0.001) {
+      const empuje = (1.4 - dd) * 0.5;
+      g.position.x += (ox / dd) * empuje;
+      g.position.z += (oz / dd) * empuje;
+    }
+  });
+}
+
+let ultimoExtras = 0;
+
+animaciones.push((t) => {
+
+  const delta = Math.min(Math.max(t - ultimoExtras, 0), 0.05);
+  ultimoExtras = t;
+  const k = Math.min(delta * 6, 1);
+
+  // Cuando la principal ya atrapó a Chuleta, las demás se enojan (hasta que se van a la mesa)
+  const enojadas = capturado() && !enBar();
+
+  extras.forEach((m, i) => {
+    const g = m.grupo;
+    const fase = i * 0.9;
+
+    // ---------- En la mesa: caminan, se sientan y toman ----------
+    if (enBar()) {
+      const silla = SILLAS[i];
+      const bx = silla.pos.x - g.position.x;
+      const bz = silla.pos.z - g.position.z;
+      const d = Math.hypot(bx, bz);
+
+      m.tEnojo = 0;
+      m.enojo.visible = false;
+      g.rotation.z += (0 - g.rotation.z) * k;
+      m.vaso.visible = true;
+
+      if (d > 0.15) {
+        g.rotation.y = Math.atan2(bx, bz);
+        const paso = Math.min(VELOCIDAD_PERSONA * 0.8 * delta, d);
+        g.position.x += (bx / d) * paso;
+        g.position.z += (bz / d) * paso;
+
+        const c = Math.sin(t * 10 + fase);
+        m.piernaIzq.rotation.x = c * 0.6;
+        m.piernaDer.rotation.x = -c * 0.6;
+        hacia(m.brazoIzq, 0, k);
+        hacia(m.brazoDer, -0.3, k);
+        g.position.y = Math.abs(c) * 0.05;
+      } else {
+        // Sentadas; miran a Ingrid cuando está mal
+        const mirarla = ['mareada', 'vomita', 'avanza', 'cae', 'caida'].includes(estado);
+        const objetivo = mirarla
+          ? Math.atan2(persona.position.x - g.position.x, persona.position.z - g.position.z)
+          : silla.giro;
+        g.rotation.y += difAngulo(g.rotation.y, objetivo) * k;
+
+        hacia(m.piernaIzq, -Math.PI / 2, k);
+        hacia(m.piernaDer, -Math.PI / 2, k);
+        g.position.y += (ALTURA_SENTADO - g.position.y) * k;
+
+        const sorbo = Math.max(0, Math.sin(t * 2.2 + fase * 2));
+        hacia(m.brazoDer, -Math.PI * 0.2 - sorbo * Math.PI * 0.5, k);
+        hacia(m.brazoIzq, -0.3, k);
+      }
+      return;
+    }
+
+    // ---------- Enojadas ----------
+    if (enojadas) {
+      m.tEnojo += delta;
+
+      // Miran con coraje a la muchacha principal
+      const objetivo = Math.atan2(
+        persona.position.x - g.position.x,
+        persona.position.z - g.position.z
+      );
+      g.rotation.y += difAngulo(g.rotation.y, objetivo) * k;
+
+      // Patalean, tiemblan y sacuden los puños
+      const pisada = Math.sin(t * 9 + fase);
+      g.position.y = Math.abs(pisada) * 0.1;
+      g.rotation.z = Math.sin(t * 28 + fase) * 0.04;
+
+      m.piernaIzq.rotation.x = Math.max(pisada, 0) * 0.7;
+      m.piernaDer.rotation.x = Math.max(-pisada, 0) * 0.7;
+      m.brazoIzq.rotation.x = -Math.PI * 0.75 + Math.sin(t * 18 + fase) * 0.25;
+      m.brazoDer.rotation.x = -Math.PI * 0.75 + Math.sin(t * 18 + fase + 1.5) * 0.25;
+
+      // Letrero de enojo
+      const pop = Math.min(m.tEnojo / 0.2, 1);
+      m.enojo.visible = true;
+      m.enojo.scale.set(1.3 * pop, 0.325 * pop, 1);
+      m.enojo.position.y = 2.6 + Math.abs(pisada) * 0.08;
+      return;
+    }
+
+    m.tEnojo = 0;
+    m.enojo.visible = false;
+    g.rotation.z += (0 - g.rotation.z) * k;
+
+    // ---------- Persiguiendo a Chuleta (misma velocidad que la principal) ----------
+    if (estado === 'persigue') {
+      const dx = robot.position.x - g.position.x;
+      const dz = robot.position.z - g.position.z;
+      const d = Math.sqrt(dx * dx + dz * dz);
+      const parar = DISTANCIA_EXTRA + i * 0.35;
+
+      g.rotation.y = Math.atan2(dx, dz);
+
+      if (d > parar) {
+        g.position.x += (dx / d) * VELOCIDAD_PERSONA * delta;
+        g.position.z += (dz / d) * VELOCIDAD_PERSONA * delta;
+
+        const carrera = Math.sin(t * 14 + fase);
+        m.piernaIzq.rotation.x = carrera * 0.9;
+        m.piernaDer.rotation.x = -carrera * 0.9;
+        m.brazoIzq.rotation.x = -carrera * 0.8;
+        m.brazoDer.rotation.x = carrera * 0.8;
+        g.position.y = Math.abs(carrera) * 0.08;
+      } else {
+        // Ya lo alcanzaron de cerca, pero no pueden atraparlo: estiran los brazos
+        hacia(m.piernaIzq, 0, k);
+        hacia(m.piernaDer, 0, k);
+        hacia(m.brazoIzq, -Math.PI * 0.45 + Math.sin(t * 8 + fase) * 0.15, k);
+        hacia(m.brazoDer, -Math.PI * 0.45 + Math.sin(t * 8 + fase + 1) * 0.15, k);
+        g.position.y += (0 - g.position.y) * k;
+      }
+
+      separar(g);
+      return;
+    }
+
+    // ---------- Esperando: miran a Chuleta y respiran ----------
+    const objetivo = Math.atan2(
+      robot.position.x - g.position.x,
+      robot.position.z - g.position.z
+    );
+    g.rotation.y += difAngulo(g.rotation.y, objetivo) * k;
+
+    const resp = Math.sin(t * 1.6 + i * 1.7);
+    g.position.y += (0 - g.position.y) * k;
+    hacia(m.brazoIzq, resp * 0.06, k);
+    hacia(m.brazoDer, -resp * 0.06, k);
+    hacia(m.piernaIzq, 0, k);
+    hacia(m.piernaDer, 0, k);
+  });
+
+});
+
+// ==================================================
+//                  BUCLE PRINCIPAL
+// ==================================================
+
+let ultimoBucle = 0;
+
+renderizador.setAnimationLoop(() => {
+
+  const t = reloj.getElapsedTime();
+  const delta = Math.min(Math.max(t - ultimoBucle, 0), 0.05);
+  ultimoBucle = t;
+
+  animaciones.forEach((animar) => animar(t));
+
+  const lineas = Object.entries(datos).map(
+    ([k, v]) => `${k}: ${v}`
+  );
+
+  panel.textContent = lineas.join('\n');
+
+  actualizarCamara(delta);
+
+  renderizador.render(escena, camara);
+
+});
+
+// ==================================================
+//                 CAMBIAR TAMAÑO
+// ==================================================
+
+addEventListener('resize', () => {
+
+  camara.aspect = innerWidth / innerHeight;
+  camara.updateProjectionMatrix();
+
+  renderizador.setSize(innerWidth, innerHeight);
+
+});

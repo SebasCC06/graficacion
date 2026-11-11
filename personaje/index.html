@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mi personaje 3D</title>
+  <link rel="stylesheet" href="css/style.css" />
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "./libs/three/build/three.module.js",
+        "three/addons/": "./libs/three/examples/jsm/"
+      }
+    }
+  </script>
+
+</head>
+
+<body>
+
+  <div id="panel"></div>
+  <div id="ayuda">
+    Indicaciones
+    <p> ArrowLeft mover a la izquierda</p>
+    <p> ArrowRight mover a la derecha</p>
+    <p> ArrowUp mover hacia arriba</p>
+    <p> ArrowDown mover hacia abajo</p>
+    <p> Space: Hacer un brinco</p>
+    <p> q: Girar a la derecha</p>
+    <p> e: Girar a la izquierda</p>
+  </div>
+
+  <script type="module" src="main.js"></script>
+</body>
+</html>
