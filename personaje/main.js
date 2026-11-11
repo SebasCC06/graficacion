@@ -44,6 +44,8 @@ const panel = document.getElementById('panel');
 // Guía de controles (aparece arriba en el panel)
 datos['Mover'] = 'Flechas · Shift = correr · Espacio = saltar · Q/E = girar';
 datos['Emotes'] = '1 Baile · 2 Amor · 3 Dormir · 4 Alegría · 5 Giro · 6 Oink';
+datos['Transformar'] = 'Z/X = escala · A/D = sesgado X · W/S = sesgado Z · 0 = reiniciar forma';
+datos['Perseguir'] = 'I = que lo corretee';
 datos['Cámara'] = 'C = cambiar perspectiva';
 datos['Reiniciar'] = 'R';
 
@@ -126,9 +128,14 @@ const blanco = new THREE.MeshStandardMaterial({ color: 0xffffff });
 const robot = new THREE.Group();
 escena.add(robot);
 
+// "forma": aquí se aplica la matriz de escalamiento + sesgado (shear) del cerdo
+const forma = new THREE.Group();
+forma.matrixAutoUpdate = false;
+robot.add(forma);
+
 const pivote = new THREE.Group();
 pivote.position.y = 0.9;
-robot.add(pivote);
+forma.add(pivote);
 
 const cerdo = new THREE.Group();
 pivote.add(cerdo);
@@ -615,6 +622,57 @@ let fase = 0;                 // fase del ciclo de caminata
 let tumbado = 0;              // 0 = de pie, 1 = acostado (dormir)
 let ultimoCerdo = 0;
 
+// ----- Movimiento por ejes -----
+// true  = solo se mueve sobre un eje a la vez (adelante/atrás en Z, izquierda/derecha en X)
+//         y NO gira solo: conserva su orientación (T para cambiar de modo)
+// false = movimiento libre en diagonal y gira hacia donde camina
+let modoEjes = true;
+let ultimoEje = 'z';
+
+// ----- Escalamiento y sesgado (shear) de Chuleta -----
+let escalaCerdo = 1;
+let sesgoX = 0;   // x' = x + sesgoX * y  (se inclina de lado)
+let sesgoZ = 0;   // z' = z + sesgoZ * y  (se inclina hacia adelante/atrás)
+
+function actualizarForma(delta) {
+  if (capturado()) {
+    // Al atraparlo vuelve a su forma normal
+    const kr = Math.min(delta * 4, 1);
+    escalaCerdo += (1 - escalaCerdo) * kr;
+    sesgoX += (0 - sesgoX) * kr;
+    sesgoZ += (0 - sesgoZ) * kr;
+  } else {
+    if (teclas.has('KeyX')) escalaCerdo *= 1 + 1.2 * delta;
+    if (teclas.has('KeyZ')) escalaCerdo /= 1 + 1.2 * delta;
+    if (teclas.has('KeyD')) sesgoX += 1.2 * delta;
+    if (teclas.has('KeyA')) sesgoX -= 1.2 * delta;
+    if (teclas.has('KeyW')) sesgoZ += 1.2 * delta;
+    if (teclas.has('KeyS')) sesgoZ -= 1.2 * delta;
+
+    if (teclas.has('Digit0') || teclas.has('Numpad0')) {
+      escalaCerdo = 1;
+      sesgoX = 0;
+      sesgoZ = 0;
+    }
+
+    escalaCerdo = THREE.MathUtils.clamp(escalaCerdo, 0.4, 3);
+    sesgoX = THREE.MathUtils.clamp(sesgoX, -1.5, 1.5);
+    sesgoZ = THREE.MathUtils.clamp(sesgoZ, -1.5, 1.5);
+  }
+
+  // Matriz = Sesgado · Escalamiento (se aplica desde los pies del cerdo)
+  forma.matrix.set(
+    escalaCerdo, sesgoX * escalaCerdo, 0, 0,
+    0, escalaCerdo, 0, 0,
+    0, sesgoZ * escalaCerdo, escalaCerdo, 0,
+    0, 0, 0, 1
+  );
+  forma.matrixWorldNeedsUpdate = true;
+
+  datos['Escala'] = escalaCerdo.toFixed(2);
+  datos['Sesgado'] = `X ${sesgoX.toFixed(2)} · Z ${sesgoZ.toFixed(2)}`;
+}
+
 // Punto delante de una persona
 function frente(p, distancia) {
   return new THREE.Vector3(
@@ -758,7 +816,7 @@ function emitir(delta, intervalo, texto, color) {
 //                  CÁMARAS (tecla C)
 // ==================================================
 
-const VISTAS = ['Libre (órbita)', 'Seguir a Chuleta', 'Vista desde arriba', 'Primera persona (Chuleta)'];
+const VISTAS = ['Libre (órbita)', 'Seguir al cuchito', 'Vista desde arriba', 'Primera persona (cuchito)'];
 let vista = 0;
 
 const _destino = new THREE.Vector3();
@@ -843,6 +901,9 @@ function reiniciar() {
   vz = 0;
   tumbado = 0;
   tPago = 0;
+  escalaCerdo = 1;
+  sesgoX = 0;
+  sesgoZ = 0;
   cancelarEmote();
 
   persona.position.copy(POSICION_INICIAL_PERSONA);
@@ -905,6 +966,18 @@ addEventListener('keydown', (e) => {
     return;
   }
 
+  // T: alternar entre movimiento por ejes y movimiento libre
+  if (e.code === 'KeyT') {
+    if (!e.repeat) modoEjes = !modoEjes;
+    return;
+  }
+
+  // I: empiezan a corretear a Chuleta
+  if (e.code === 'KeyI') {
+    if (estado === 'espera') cambiarEstado('persigue');
+    return;
+  }
+
   // Evitar que las flechas / espacio muevan la página
   if (TECLAS_BLOQUEADAS.has(e.code)) {
     e.preventDefault();
@@ -914,6 +987,10 @@ addEventListener('keydown', (e) => {
   if (capturado()) return;
 
   teclas.add(e.code);
+
+  // Recordar el último eje que se presionó
+  if (e.code === 'ArrowLeft' || e.code === 'ArrowRight') ultimoEje = 'x';
+  if (e.code === 'ArrowUp' || e.code === 'ArrowDown') ultimoEje = 'z';
 
   // Emotes
   if (TECLA_EMOTE[e.code] && !e.repeat) {
@@ -951,6 +1028,7 @@ animaciones.push((t) => {
   ultimoCerdo = t;
 
   actualizarParticulas(delta);
+  actualizarForma(delta);
 
   // ---------- Atrapado: la persona controla la posición ----------
   if (capturado()) {
@@ -985,6 +1063,12 @@ animaciones.push((t) => {
   if (teclas.has('ArrowDown')) iz += 1;
   if (teclas.has('ArrowUp')) iz -= 1;
 
+  // Modo ejes: si hay dos flechas a la vez, solo cuenta el eje de la última presionada
+  if (modoEjes && ix !== 0 && iz !== 0) {
+    if (ultimoEje === 'x') iz = 0;
+    else ix = 0;
+  }
+
   const hayMovimiento = ix !== 0 || iz !== 0;
 
   // Moverse cancela cualquier emote
@@ -1011,14 +1095,11 @@ animaciones.push((t) => {
 
   const velocidad = Math.hypot(vx, vz);
 
-  // La persona empieza a perseguir cuando Chuleta se mueve
-  if (velocidad > 0.3 && estado === 'espera') {
-    cambiarEstado('persigue');
-  }
+  // (La persecución ya no empieza sola: se inicia con la tecla I)
 
   // ---------- Orientación: gira suavemente hacia donde camina ----------
   if (!emote) {
-    if (velocidad > 0.3) {
+    if (!modoEjes && velocidad > 0.3) {
       const objetivo = Math.atan2(vx, vz);
       robot.rotation.y += difAngulo(robot.rotation.y, objetivo) * Math.min(delta * 10, 1);
     }
@@ -1206,6 +1287,9 @@ animaciones.push((t) => {
 
   datos['Velocidad'] = velocidad.toFixed(1) + ' m/s' + (correr && hayMovimiento ? ' (corriendo)' : '');
   datos['Emote'] = emote ? EMOTES[emote].etiqueta : '—';
+  datos['Movimiento'] = modoEjes
+    ? 'Por ejes (T = libre): ↑ −Z · ↓ +Z · ← −X · → +X'
+    : 'Libre (T = por ejes)';
 
 });
 
@@ -1618,7 +1702,7 @@ animaciones.push((t) => {
   }
 
   const textos = {
-    espera: 'Esperando movimiento',
+    espera: 'Libre (I para que lo corretee)',
     persigue: 'Persiguiendo a Chuleta',
     levanta: '¡Atrapó a Chuleta!',
     camina: 'Llevando a Chuleta con el comprador',
@@ -1786,17 +1870,12 @@ animaciones.push((t) => {
       return;
     }
 
-    // ---------- Esperando: miran a Chuleta y respiran ----------
-    const objetivo = Math.atan2(
-      robot.position.x - g.position.x,
-      robot.position.z - g.position.z
-    );
-    g.rotation.y += difAngulo(g.rotation.y, objetivo) * k;
-
-    const resp = Math.sin(t * 1.6 + i * 1.7);
+    // ---------- Esperando: se quedan quietas (no reaccionan a Chuleta hasta presionar I) ----------
+    const miradaInicial = Math.atan2(-EXTRAS[i].pos[0], -EXTRAS[i].pos[2]);
+    g.rotation.y += difAngulo(g.rotation.y, miradaInicial) * k;
     g.position.y += (0 - g.position.y) * k;
-    hacia(m.brazoIzq, resp * 0.06, k);
-    hacia(m.brazoDer, -resp * 0.06, k);
+    hacia(m.brazoIzq, 0, k);
+    hacia(m.brazoDer, 0, k);
     hacia(m.piernaIzq, 0, k);
     hacia(m.piernaDer, 0, k);
   });
