@@ -46,7 +46,7 @@ datos['Mover'] = 'Flechas · Shift = correr · Espacio = saltar · Q/E = girar';
 datos['Emotes'] = '1 Baile · 2 Amor · 3 Dormir · 4 Alegría · 5 Giro · 6 Oink';
 datos['Transformar'] = 'Z/X = escala · A/D = sesgado X · W/S = sesgado Z · 0 = reiniciar forma';
 datos['Perseguir'] = 'I = que lo corretee';
-datos['Cámara'] = 'C = cambiar perspectiva';
+datos['Cámara'] = 'C = cambiar perspectiva · B = plaza de toros sí/no';
 datos['Reiniciar'] = 'R';
 
 function vec(v) {
@@ -568,6 +568,609 @@ function actualizarVomitos(delta) {
 }
 
 // ==================================================
+//            CAMIONETA Y PLAZA DE TOROS
+// ==================================================
+
+// ----- Camioneta -----
+// Empieza MUY lejos, afuera de la plaza. Cuando Ingrid se cae entra de reversa
+// por la Puerta Grande, y después se va por el mismo camino.
+const RUTA_Z = 11;                                       // línea (z) por donde pasa la camioneta
+const CARRO_INICIO = new THREE.Vector3(52, 0, RUTA_Z);   // dónde espera (más x = más lejos)
+const CARRO_PARQUEO = new THREE.Vector3(0, 0, RUTA_Z);   // dónde se estaciona para recoger a Ingrid
+const CARRO_GIRO = Math.PI / 2;                          // el frente mira hacia +X
+
+const carro = new THREE.Group();
+carro.position.copy(CARRO_INICIO);
+carro.rotation.y = CARRO_GIRO;
+escena.add(carro);
+
+const matCarro = new THREE.MeshStandardMaterial({ color: 0x2b6cb0 });
+const matCarroOscuro = new THREE.MeshStandardMaterial({ color: 0x1b1b1f });
+const matVidrio = new THREE.MeshStandardMaterial({ color: 0x9fd3ff });
+const matRin = new THREE.MeshStandardMaterial({ color: 0xcfcfcf });
+const matFaro = new THREE.MeshStandardMaterial({
+  color: 0xfff3a0, emissive: 0xfff3a0, emissiveIntensity: 0.6
+});
+
+function cajaCarro(w, h, d, x, y, z, mat = matCarro) {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+  m.position.set(x, y, z);
+  carro.add(m);
+  return m;
+}
+
+cajaCarro(2.0, 0.4, 7.0, 0, 0.6, 0);                    // chasis (el piso de la caja queda en y = 0.8)
+cajaCarro(2.0, 1.0, 1.8, 0, 1.3, 1.0);                  // cabina
+cajaCarro(1.7, 0.5, 0.06, 0, 1.45, 1.92, matVidrio);    // parabrisas
+cajaCarro(0.1, 0.5, 3.4, -0.95, 1.05, -1.8);            // pared izquierda de la caja
+cajaCarro(0.1, 0.5, 3.4, 0.95, 1.05, -1.8);             // pared derecha de la caja
+cajaCarro(1.9, 0.5, 0.1, 0, 1.05, -0.15);               // pared delantera de la caja (atrás queda abierta)
+
+[-0.7, 0.7].forEach((x) => {
+  const faro = new THREE.Mesh(new THREE.SphereGeometry(0.12, 12, 12), matFaro);
+  faro.position.set(x, 0.75, 3.5);
+  carro.add(faro);
+});
+
+// Ruedas: cada una es un grupo para poder girarlas al avanzar
+const ruedas = [];
+[[-1.05, -2.3], [1.05, -2.3], [-1.05, 2.3], [1.05, 2.3]].forEach(([x, z]) => {
+  const rueda = new THREE.Group();
+  rueda.position.set(x, 0.45, z);
+
+  const llanta = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.45, 0.3, 20), matCarroOscuro);
+  llanta.rotation.z = Math.PI / 2;
+  rueda.add(llanta);
+
+  // Una barra clara en el rin para que se note que gira
+  rueda.add(new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.12, 0.6), matRin));
+
+  carro.add(rueda);
+  ruedas.push(rueda);
+});
+
+const _punto = new THREE.Vector3();
+
+// Convierte un punto de la camioneta (x = lateral, z = hacia el frente) a coordenadas del mundo
+function puntoCarro(x, z, salida = _punto) {
+  const c = Math.cos(carro.rotation.y);
+  const s = Math.sin(carro.rotation.y);
+  return salida.set(
+    carro.position.x + x * c + z * s,
+    0,
+    carro.position.z - x * s + z * c
+  );
+}
+
+// ----- Plaza de toros -----
+const plaza = new THREE.Group();
+escena.add(plaza);
+
+const R_ARENA = 15;
+const ANCHO_PUERTA = 5.4;                        // por aquí entra y sale la camioneta
+const FILAS = 6;
+const R_FONDO = R_ARENA + 1.8 + FILAS * 1.7;     // 27: borde de atrás de los tendidos
+const R_FACHADA = R_FONDO + 0.05;
+
+// Materiales de la plaza
+const matPiedra = new THREE.MeshStandardMaterial({ color: 0xd8cbb0 });
+const matPiedraOscura = new THREE.MeshStandardMaterial({ color: 0x9d8d73 });
+const matMaderaClara = new THREE.MeshStandardMaterial({ color: 0x8a5a33 });
+const matMetal = new THREE.MeshStandardMaterial({ color: 0x555a63 });
+const matLuz = new THREE.MeshStandardMaterial({
+  color: 0xfff3c4, emissive: 0xfff3c4, emissiveIntensity: 1
+});
+
+// Ángulo (medido desde +Z hacia +X) donde la ruta de la camioneta cruza un círculo de radio r
+function anguloSalida(r) {
+  return Math.atan2(Math.sqrt(r * r - RUTA_Z * RUTA_Z), RUTA_Z);
+}
+
+const A_PUERTA = anguloSalida(R_ARENA); // dirección de la puerta vista desde el centro
+
+// ¿Este ángulo cae dentro del hueco de la puerta?
+function cercaDePuerta(a, r, extra = 0.03) {
+  return Math.abs(difAngulo(a, anguloSalida(r))) < (ANCHO_PUERTA / r) / 2 + extra;
+}
+
+// Recorre un círculo en n pasos (saltándose la puerta) y llama a hacer(ángulo, i)
+function segmentosAnillo(r, n, saltarPuerta, hacer) {
+  for (let i = 0; i < n; i++) {
+    const a = (i + 0.5) * Math.PI * 2 / n;
+    if (saltarPuerta && cercaDePuerta(a, r)) continue;
+    hacer(a, i);
+  }
+}
+
+// Punto en el borde del hueco de la puerta (signo = -1 / +1 para cada lado)
+function puntoBorde(r, signo) {
+  const a = anguloSalida(r) + signo * (ANCHO_PUERTA / r) / 2;
+  return new THREE.Vector3(Math.sin(a) * r, 0, Math.cos(a) * r);
+}
+
+// Pared circular (abierta arriba y abajo) con un hueco para la puerta
+function paredConPuerta(r, alto, y, color) {
+  const hueco = ANCHO_PUERTA / r;
+  const malla = new THREE.Mesh(
+    new THREE.CylinderGeometry(r, r, alto, 96, 1, true, anguloSalida(r) + hueco / 2, Math.PI * 2 - hueco),
+    new THREE.MeshStandardMaterial({ color, side: THREE.DoubleSide })
+  );
+  malla.position.y = y;
+  plaza.add(malla);
+  return malla;
+}
+
+// Piso/escalón en forma de anillo, también con hueco para la puerta
+function anilloConPuerta(rIn, rOut, y, color) {
+  const rm = (rIn + rOut) / 2;
+  const hueco = ANCHO_PUERTA / rm;
+  const malla = new THREE.Mesh(
+    new THREE.RingGeometry(rIn, rOut, 96, 1, anguloSalida(rm) - Math.PI / 2 + hueco / 2, Math.PI * 2 - hueco),
+    new THREE.MeshStandardMaterial({ color, side: THREE.DoubleSide })
+  );
+  malla.rotation.x = -Math.PI / 2;
+  malla.position.y = y;
+  plaza.add(malla);
+  return malla;
+}
+
+// Barandal hecho con segmentos (no cruza la puerta)
+function barandal(r, y, n, mat, grosor = 0.1, alto = 0.1) {
+  const geo = new THREE.BoxGeometry(grosor, alto, 2 * Math.PI * r / n + 0.05);
+  segmentosAnillo(r, n, true, (a) => {
+    const m = new THREE.Mesh(geo, mat);
+    m.position.set(Math.sin(a) * r, y, Math.cos(a) * r);
+    m.rotation.y = a + Math.PI / 2;
+    plaza.add(m);
+  });
+}
+
+// Letrero con texto (que se ajusta al ancho)
+function crearCartel(texto, fondo, color, ancho, alto) {
+  const lienzo = document.createElement('canvas');
+  lienzo.width = 512;
+  lienzo.height = Math.round(512 * alto / ancho);
+
+  const ctx = lienzo.getContext('2d');
+  ctx.fillStyle = fondo;
+  ctx.fillRect(0, 0, lienzo.width, lienzo.height);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 6;
+  ctx.strokeRect(6, 6, lienzo.width - 12, lienzo.height - 12);
+
+  let px = 90;
+  ctx.font = `bold ${px}px sans-serif`;
+  while (ctx.measureText(texto).width > lienzo.width - 50 && px > 16) {
+    px -= 4;
+    ctx.font = `bold ${px}px sans-serif`;
+  }
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = color;
+  ctx.fillText(texto, lienzo.width / 2, lienzo.height / 2 + 4);
+
+  return new THREE.Mesh(
+    new THREE.PlaneGeometry(ancho, alto),
+    new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(lienzo), side: THREE.DoubleSide })
+  );
+}
+
+// ----- Suelo de fuera de la plaza -----
+const sueloExterior = new THREE.Mesh(
+  new THREE.CircleGeometry(80, 48),
+  new THREE.MeshStandardMaterial({ color: 0x3a3a3f })
+);
+sueloExterior.rotation.x = -Math.PI / 2;
+sueloExterior.position.y = -0.06;
+plaza.add(sueloExterior);
+
+// ----- Camino por donde entra/sale la camioneta -----
+const camino = new THREE.Mesh(
+  new THREE.PlaneGeometry(70, 5.4),
+  new THREE.MeshStandardMaterial({ color: 0x4a4a50 })
+);
+camino.rotation.x = -Math.PI / 2;
+camino.position.set(35, -0.04, RUTA_Z);
+plaza.add(camino);
+
+// Rayas del camino
+const geoRaya = new THREE.BoxGeometry(1.4, 0.01, 0.14);
+for (let x = 14; x < 68; x += 3.2) {
+  const raya = new THREE.Mesh(geoRaya, new THREE.MeshStandardMaterial({ color: 0xf1e9c8 }));
+  raya.position.set(x, -0.03, RUTA_Z);
+  plaza.add(raya);
+}
+
+// ----- Ruedo de arena -----
+const arena = new THREE.Mesh(
+  new THREE.CircleGeometry(R_ARENA, 96),
+  new THREE.MeshStandardMaterial({ color: 0xd9b77a })
+);
+arena.rotation.x = -Math.PI / 2;
+arena.position.y = -0.03;
+plaza.add(arena);
+
+// Surcos de rastrillo en la arena
+[3.2, 4.6, 8.6, 10.2, 11.8, 13.4].forEach((r) => {
+  const surco = new THREE.Mesh(
+    new THREE.RingGeometry(r, r + 0.07, 80),
+    new THREE.MeshStandardMaterial({ color: 0xc4a05f })
+  );
+  surco.rotation.x = -Math.PI / 2;
+  surco.position.y = -0.027;
+  plaza.add(surco);
+});
+
+// Círculos pintados (el central y el de los tercios)
+[[6.9, 7.1], [11.0, 11.14]].forEach(([a, b]) => {
+  const aro = new THREE.Mesh(
+    new THREE.RingGeometry(a, b, 96),
+    new THREE.MeshStandardMaterial({ color: 0xf3e9cf, side: THREE.DoubleSide })
+  );
+  aro.rotation.x = -Math.PI / 2;
+  aro.position.y = -0.02;
+  plaza.add(aro);
+});
+
+// Cruz central
+[0, Math.PI / 2].forEach((giro) => {
+  const brazo = new THREE.Mesh(
+    new THREE.BoxGeometry(1.4, 0.01, 0.1),
+    new THREE.MeshStandardMaterial({ color: 0xf3e9cf })
+  );
+  brazo.position.y = -0.015;
+  brazo.rotation.y = giro;
+  plaza.add(brazo);
+});
+
+// ----- Barrera -----
+paredConPuerta(R_ARENA, 1.6, 0.8, 0x9c2b1d);          // pared roja
+paredConPuerta(R_ARENA + 0.02, 0.18, 1.5, 0xf2efe6);  // franja blanca
+paredConPuerta(R_ARENA - 0.01, 0.3, 0.15, 0x5a3a20);  // zoclo de madera
+barandal(R_ARENA + 0.04, 1.68, 72, matMaderaClara, 0.22, 0.1); // tabla de arriba
+
+// Anuncios en la barrera
+const ANUNCIOS = [
+  ['CARNITAS',  '#f2c230', '#7a1f14'], ['CERVEZA',  '#1e56c8', '#ffffff'],
+  ['MORELIA',   '#9c2b1d', '#ffe9a8'], ['TEQUILA',  '#2a9d8f', '#ffffff'],
+  ['TACOS',     '#f77f00', '#2a1a10'], ['MEZCAL',   '#333333', '#f2c230'],
+  ['CHURROS',   '#e85d9a', '#ffffff'], ['ELOTES',   '#4caf50', '#ffffff'],
+  ['REFRESCOS', '#d62828', '#ffffff'], ['PULQUE',   '#f1e9c8', '#7a1f14'],
+  ['LA PLAZA',  '#7a1f14', '#f2c230'], ['TORERÍA',  '#222222', '#f2efe6'],
+  ['MICHOACÁN', '#006847', '#ffffff'], ['AGUAS',    '#9fd3ff', '#1e3a8a'],
+  ['PAN',       '#d9a441', '#3a2412'], ['SOMBREROS', '#ce1126', '#ffffff']
+];
+
+ANUNCIOS.forEach(([texto, fondo, color], i) => {
+  const a = (i + 0.5) * Math.PI * 2 / ANUNCIOS.length;
+  if (cercaDePuerta(a, R_ARENA, 0.25)) return;
+
+  const cartel = crearCartel(texto, fondo, color, 2.4, 0.7);
+  cartel.position.set(Math.sin(a) * (R_ARENA - 0.06), 0.8, Math.cos(a) * (R_ARENA - 0.06));
+  cartel.rotation.y = a + Math.PI; // mira hacia el centro
+  plaza.add(cartel);
+});
+
+// Burladeros (los escudos de madera frente a la barrera)
+[2.1, 3.4, 4.6, 5.6].forEach((a) => {
+  const g = new THREE.Group();
+  g.position.set(Math.sin(a) * 14.1, 0, Math.cos(a) * 14.1);
+  g.rotation.y = a + Math.PI;
+
+  const tablero = new THREE.Mesh(
+    new THREE.BoxGeometry(1.3, 1.5, 0.1),
+    new THREE.MeshStandardMaterial({ color: 0x9c2b1d })
+  );
+  tablero.position.y = 0.75;
+  g.add(tablero);
+
+  const franja = new THREE.Mesh(
+    new THREE.BoxGeometry(1.34, 0.14, 0.14),
+    new THREE.MeshStandardMaterial({ color: 0xf2efe6 })
+  );
+  franja.position.y = 1.45;
+  g.add(franja);
+
+  const ala = new THREE.Mesh(
+    new THREE.BoxGeometry(0.1, 1.5, 0.7),
+    new THREE.MeshStandardMaterial({ color: 0x7a1f14 })
+  );
+  ala.position.set(0.7, 0.75, 0.3);
+  g.add(ala);
+
+  plaza.add(g);
+});
+
+// Callejón (el piso entre la barrera y el primer escalón)
+anilloConPuerta(R_ARENA, R_ARENA + 1.8, -0.02, 0xb98f55);
+
+// ----- Tendidos: 6 filas de gradas escalonadas -----
+for (let i = 0; i < FILAS; i++) {
+  const rIn = R_ARENA + 1.8 + i * 1.7;
+  const rOut = rIn + 1.7;
+  const yArriba = 1.7 + i * 1.05;
+  const alto = i === 0 ? 1.7 : 1.05;
+
+  paredConPuerta(rIn, alto, yArriba - alto / 2, i % 2 ? 0xbfb29a : 0xd2c7b2);
+  anilloConPuerta(rIn, rOut, yArriba, i % 2 ? 0xa79a82 : 0xc9bda6);
+}
+
+// Barandales: al frente del primer tendido y en lo más alto
+barandal(R_ARENA + 1.9, 2.25, 72, matMetal, 0.08, 0.08);
+barandal(R_ARENA + 1.9, 1.95, 72, matMetal, 0.08, 0.08);
+barandal(R_FONDO - 0.2, 7.55, 90, matMetal, 0.08, 0.08);
+barandal(R_FONDO - 0.2, 7.25, 90, matMetal, 0.08, 0.08);
+
+// Muro de atrás de los tendidos
+paredConPuerta(R_FONDO, 1.6, 1.7 + (FILAS - 1) * 1.05 + 0.8, 0x8d3a25);
+
+// ----- Fachada exterior con columnas, ventanas, cornisa y banderines -----
+paredConPuerta(R_FACHADA, 7.0, 3.5, 0xcbb894);
+
+const NCOL = 40;
+const geoColumna = new THREE.BoxGeometry(0.7, 8.8, 0.7);
+const geoVentana = new THREE.BoxGeometry(1.5, 2.7, 0.12);
+const geoMastil = new THREE.CylinderGeometry(0.04, 0.04, 2.2, 6);
+const geoBandera = new THREE.PlaneGeometry(1.0, 0.6);
+const COLORES_BANDERA = [0x006847, 0xf2efe6, 0xce1126];
+
+segmentosAnillo(R_FACHADA + 0.1, NCOL, true, (a, i) => {
+  const r = R_FACHADA + 0.1;
+
+  const col = new THREE.Mesh(geoColumna, matPiedra);
+  col.position.set(Math.sin(a) * r, 4.4, Math.cos(a) * r);
+  col.rotation.y = a;
+  plaza.add(col);
+
+  // Ventana entre esta columna y la siguiente
+  const av = a + Math.PI / NCOL;
+  if (!cercaDePuerta(av, r, 0.12)) {
+    const ven = new THREE.Mesh(geoVentana, new THREE.MeshStandardMaterial({ color: 0x2a1f1a }));
+    ven.position.set(Math.sin(av) * (R_FACHADA + 0.04), 3.3, Math.cos(av) * (R_FACHADA + 0.04));
+    ven.rotation.y = av;
+    plaza.add(ven);
+  }
+
+  // Banderín arriba de cada segunda columna
+  if (i % 2 === 0) {
+    const mastil = new THREE.Mesh(geoMastil, matMetal);
+    mastil.position.set(Math.sin(a) * r, 8.8 + 1.1, Math.cos(a) * r);
+    plaza.add(mastil);
+
+    const bandera = new THREE.Mesh(
+      geoBandera,
+      new THREE.MeshBasicMaterial({ color: COLORES_BANDERA[(i / 2) % 3 | 0], side: THREE.DoubleSide })
+    );
+    bandera.position.set(Math.sin(a) * r, 8.8 + 1.9, Math.cos(a) * r);
+    bandera.position.x += Math.cos(a) * 0.5;
+    bandera.position.z -= Math.sin(a) * 0.5;
+    bandera.rotation.y = a + Math.PI / 2;
+    plaza.add(bandera);
+  }
+});
+
+// Cornisa (remate de la fachada)
+barandal(R_FACHADA + 0.12, 8.95, 90, matPiedra, 1.0, 0.3);
+
+// ----- Puerta Grande -----
+const pIzq = puntoBorde(R_ARENA, -1);
+const pDer = puntoBorde(R_ARENA, 1);
+
+[pIzq, pDer].forEach((p) => {
+  const pilar = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.45, 3.8, 16), matPiedra);
+  pilar.position.set(p.x, 1.9, p.z);
+  plaza.add(pilar);
+
+  const capitel = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.3, 1.0), matPiedraOscura);
+  capitel.position.set(p.x, 3.95, p.z);
+  plaza.add(capitel);
+
+  const lampara = new THREE.Mesh(new THREE.SphereGeometry(0.22, 12, 12), matLuz);
+  lampara.position.set(p.x, 4.6, p.z);
+  plaza.add(lampara);
+});
+
+const dxP = pDer.x - pIzq.x;
+const dzP = pDer.z - pIzq.z;
+const dintel = new THREE.Mesh(
+  new THREE.BoxGeometry(Math.hypot(dxP, dzP) + 1.0, 0.5, 0.7),
+  matPiedra
+);
+dintel.position.set((pIzq.x + pDer.x) / 2, 4.3, (pIzq.z + pDer.z) / 2);
+dintel.rotation.y = Math.atan2(-dzP, dxP);
+plaza.add(dintel);
+
+const cartelPuerta = crearCartel('PUERTA GRANDE', '#7a1f14', '#ffe9a8', 4.4, 1.1);
+cartelPuerta.position.set(
+  (pIzq.x + pDer.x) / 2 - Math.sin(A_PUERTA) * 0.4,
+  5.3,
+  (pIzq.z + pDer.z) / 2 - Math.cos(A_PUERTA) * 0.4
+);
+cartelPuerta.rotation.y = A_PUERTA + Math.PI;
+plaza.add(cartelPuerta);
+
+// Túnel: paredes a los lados del hueco de la puerta, a través de los tendidos
+const SEGMENTOS_TUNEL = 8;
+[-1, 1].forEach((signo) => {
+  for (let j = 0; j < SEGMENTOS_TUNEL; j++) {
+    const r0 = R_ARENA + (R_FACHADA + 0.3 - R_ARENA) * j / SEGMENTOS_TUNEL;
+    const r1 = R_ARENA + (R_FACHADA + 0.3 - R_ARENA) * (j + 1) / SEGMENTOS_TUNEL;
+    const p0 = puntoBorde(r0, signo);
+    const p1 = puntoBorde(r1, signo);
+
+    const muro = new THREE.Mesh(
+      new THREE.BoxGeometry(0.3, 7.4, Math.hypot(p1.x - p0.x, p1.z - p0.z) + 0.1),
+      matPiedraOscura
+    );
+    muro.position.set((p0.x + p1.x) / 2, 3.7, (p0.z + p1.z) / 2);
+    muro.rotation.y = Math.atan2(p1.x - p0.x, p1.z - p0.z);
+    plaza.add(muro);
+  }
+});
+
+// ----- Torres de luz -----
+[2.3, 3.5, 4.7, 5.9].forEach((a) => {
+  const poste = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.35, 14, 8), matMetal);
+  poste.position.set(Math.sin(a) * 31, 7, Math.cos(a) * 31);
+  plaza.add(poste);
+
+  const foco = new THREE.Mesh(new THREE.BoxGeometry(2.8, 1.4, 0.5), matLuz);
+  foco.position.set(Math.sin(a) * 31, 14.3, Math.cos(a) * 31);
+  foco.rotation.y = a + Math.PI; // mira hacia la plaza
+  plaza.add(foco);
+});
+
+// Cielo del atardecer (B muestra/oculta la plaza)
+escena.background.set(0x3b4f7a);
+
+// ----- Público sentado en los tendidos -----
+let semilla = 20261111;
+function azar() {
+  semilla = (semilla * 16807) % 2147483647;
+  return semilla / 2147483647;
+}
+
+const COLORES_CAMISA = [0xd62828, 0xf4c430, 0x1e56c8, 0x2a9d8f, 0xffffff, 0xe85d9a, 0x8e44ad, 0xf77f00, 0x3a3a3a, 0x4caf50];
+const COLORES_PANTALON = [0x1e3a8a, 0x333333, 0x6b7280, 0x7c5c3a, 0x1f2937];
+const COLORES_PIEL = [0xffc18b, 0xe0a370, 0xc68642, 0x8d5524, 0xf1c27d];
+const COLORES_PELO = [0x1a1a1a, 0x38251c, 0x5a3825, 0x7a2e1b, 0xd9a441, 0x777777];
+const COLORES_SOMBRERO = [0xe6c885, 0xf2e2b0, 0x222222, 0xb08850];
+
+const publico = [];
+
+for (let i = 0; i < FILAS; i++) {
+  const rAsiento = R_ARENA + 1.8 + i * 1.7 + 1.1;
+  const yAsiento = 1.7 + i * 1.05;
+  const n = Math.floor(2 * Math.PI * rAsiento / 1.0);
+
+  for (let j = 0; j < n; j++) {
+    const a = (j + (i % 2) * 0.5) * Math.PI * 2 / n;
+
+    if (cercaDePuerta(a, rAsiento, 0.08)) continue; // no se sientan en la puerta
+    if (azar() < 0.07) continue;                    // algunos lugares vacíos
+
+    publico.push({
+      x: Math.sin(a) * rAsiento,
+      z: Math.cos(a) * rAsiento,
+      y: yAsiento,
+      yaw: a + Math.PI, // miran hacia el centro
+      ang: a,
+      fase: azar() * Math.PI * 2,
+      sombrero: azar() < 0.35,
+      camisa: COLORES_CAMISA[(azar() * COLORES_CAMISA.length) | 0],
+      pantalon: COLORES_PANTALON[(azar() * COLORES_PANTALON.length) | 0],
+      piel: COLORES_PIEL[(azar() * COLORES_PIEL.length) | 0],
+      pelo: COLORES_PELO[(azar() * COLORES_PELO.length) | 0],
+      colSombrero: COLORES_SOMBRERO[(azar() * COLORES_SOMBRERO.length) | 0]
+    });
+  }
+}
+
+const NP = publico.length;
+const matInstancia = new THREE.MeshStandardMaterial({ color: 0xffffff });
+
+function crearInstancias(geometria) {
+  const m = new THREE.InstancedMesh(geometria, matInstancia, NP);
+  m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  m.frustumCulled = false;
+  plaza.add(m);
+  return m;
+}
+
+const mPiernas = crearInstancias(new THREE.BoxGeometry(0.38, 0.16, 0.7));
+const mTorso = crearInstancias(new THREE.BoxGeometry(0.46, 0.55, 0.3));
+const mCabeza = crearInstancias(new THREE.SphereGeometry(0.17, 12, 10));
+const mPelo = crearInstancias(new THREE.SphereGeometry(0.185, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.55));
+const mCopa = crearInstancias(new THREE.CylinderGeometry(0.1, 0.12, 0.14, 10));
+const mAla = crearInstancias(new THREE.CylinderGeometry(0.27, 0.27, 0.02, 16));
+
+const _col = new THREE.Color();
+publico.forEach((s, i) => {
+  mPiernas.setColorAt(i, _col.setHex(s.pantalon));
+  mTorso.setColorAt(i, _col.setHex(s.camisa));
+  mCabeza.setColorAt(i, _col.setHex(s.piel));
+  mPelo.setColorAt(i, _col.setHex(s.pelo));
+  mCopa.setColorAt(i, _col.setHex(s.colSombrero));
+  mAla.setColorAt(i, _col.setHex(s.colSombrero));
+});
+
+const _ficticio = new THREE.Object3D();
+
+// Coloca una pieza de una persona sentada (lx, ly, lz = posición local; alzar = cuánto se levanta)
+function ponerParte(malla, i, s, lx, ly, lz, alzar, esc = 1) {
+  const c = Math.cos(s.yaw);
+  const n = Math.sin(s.yaw);
+  _ficticio.position.set(
+    s.x + lx * c + lz * n,
+    s.y + ly + alzar,
+    s.z - lx * n + lz * c
+  );
+  _ficticio.rotation.set(0, s.yaw, 0);
+  _ficticio.scale.setScalar(esc);
+  _ficticio.updateMatrix();
+  malla.setMatrixAt(i, _ficticio.matrix);
+}
+
+// Las piernas (y los sombreros ocultos) se colocan una sola vez
+publico.forEach((s, i) => {
+  ponerParte(mPiernas, i, s, 0, 0.08, 0.3, 0);
+  if (!s.sombrero) {
+    ponerParte(mCopa, i, s, 0, 1.05, 0, 0, 0);
+    ponerParte(mAla, i, s, 0, 0.99, 0, 0, 0);
+  }
+});
+
+function posicionarPublico(t, emocion) {
+  for (let i = 0; i < NP; i++) {
+    const s = publico[i];
+
+    // Saltitos cuando hay emoción; "ola" cuando todo está tranquilo
+    const salto = Math.pow(Math.max(0, Math.sin(t * (6 + (s.fase % 2)) + s.fase)), 2) * 0.3 * emocion;
+    const ola = Math.pow(Math.max(0, Math.sin(s.ang * 3 - t * 2.2)), 3) * 0.3 * (1 - emocion);
+    const alzar = salto + ola;
+
+    ponerParte(mTorso, i, s, 0, 0.44, 0, alzar);
+    ponerParte(mCabeza, i, s, 0, 0.9, 0, alzar);
+    ponerParte(mPelo, i, s, 0, 0.92, -0.015, alzar);
+
+    if (s.sombrero) {
+      ponerParte(mCopa, i, s, 0, 1.05, 0, alzar);
+      ponerParte(mAla, i, s, 0, 0.99, 0, alzar);
+    }
+  }
+
+  mTorso.instanceMatrix.needsUpdate = true;
+  mCabeza.instanceMatrix.needsUpdate = true;
+  mPelo.instanceMatrix.needsUpdate = true;
+  mCopa.instanceMatrix.needsUpdate = true;
+  mAla.instanceMatrix.needsUpdate = true;
+}
+
+posicionarPublico(0, 0.15);
+mPiernas.instanceMatrix.needsUpdate = true;
+
+// Qué tan emocionado está el público en cada momento
+const EMOCION = {
+  espera: 0.15, persigue: 0.8, levanta: 1, camina: 0.5, entrega: 0.5, paga: 0.5, fin: 1,
+  va_mesa: 0.2, bebe: 0.2, mareada: 0.6, vomita: 0.8, avanza: 0.8, cae: 1, caida: 0.9,
+  auxilio: 0.6, cargan: 0.5, sube: 0.8, se_va: 1, se_fue: 0.3
+};
+
+let emocionPublico = 0.15;
+let ultimoPublico = 0;
+
+animaciones.push((t) => {
+  const delta = Math.min(Math.max(t - ultimoPublico, 0), 0.05);
+  ultimoPublico = t;
+
+  if (!plaza.visible) return; // si ocultaste la plaza con B, no gastar tiempo
+
+  const objetivo = EMOCION[estado] ?? 0.2;
+  emocionPublico += (objetivo - emocionPublico) * Math.min(delta * 3, 1);
+  posicionarPublico(t, emocionPublico);
+});
+
+// ==================================================
 //                 VARIABLES DE JUEGO
 // ==================================================
 
@@ -589,6 +1192,32 @@ const capturado = () => estado !== 'espera' && estado !== 'persigue';
 
 const ESTADOS_BAR = ['va_mesa', 'bebe', 'mareada', 'vomita', 'avanza', 'cae', 'caida'];
 const enBar = () => ESTADOS_BAR.includes(estado);
+
+// Después de caerse: las amigas la cargan, la suben a la camioneta y se la llevan
+const ESTADOS_RESCATE = ['auxilio', 'cargan', 'sube', 'se_va', 'se_fue'];
+const enRescate = () => ESTADOS_RESCATE.includes(estado);
+
+const LARGO_CUERPO = 1.3;   // de los pies de Ingrid al centro de su cuerpo (acostada)
+const subeCentro = new THREE.Vector3();
+let subeGiro = 0;
+let velCarro = 0;
+
+// Lugar de cada amiga alrededor de Ingrid: 0 y 1 la cargan, 2 y 3 caminan detrás
+function slotRescate(i) {
+  const ry = persona.rotation.y;
+  const fx = Math.sin(ry);
+  const fz = Math.cos(ry);
+  const rx = Math.cos(ry);
+  const rz = -Math.sin(ry);
+  const lado = [-0.95, 0.95, -0.5, 0.5][i];
+  const adelante = [LARGO_CUERPO, LARGO_CUERPO, -1.0, -1.0][i];
+
+  return new THREE.Vector3(
+    persona.position.x + fx * adelante + rx * lado,
+    0,
+    persona.position.z + fz * adelante + rz * lado
+  );
+}
 let baseAvance = 0;
 
 const VELOCIDAD_PERSONA = 3.5;
@@ -816,7 +1445,7 @@ function emitir(delta, intervalo, texto, color) {
 //                  CÁMARAS (tecla C)
 // ==================================================
 
-const VISTAS = ['Libre (órbita)', 'Seguir al cuchito', 'Vista desde arriba', 'Primera persona (cuchito)'];
+const VISTAS = ['Libre (órbita)', 'Seguir a Chuleta', 'Vista desde arriba', 'Primera persona (Chuleta)'];
 let vista = 0;
 
 const _destino = new THREE.Vector3();
@@ -946,6 +1575,12 @@ function reiniciar() {
     p.m.geometry.dispose();
   });
   vomitos.length = 0;
+
+  // Camioneta de regreso a su lugar (lejos, afuera de la plaza)
+  carro.position.copy(CARRO_INICIO);
+  carro.rotation.y = CARRO_GIRO;
+  ruedas.forEach((r) => { r.rotation.x = 0; });
+  velCarro = 0;
 }
 
 const TECLAS_BLOQUEADAS = new Set([
@@ -969,6 +1604,15 @@ addEventListener('keydown', (e) => {
   // T: alternar entre movimiento por ejes y movimiento libre
   if (e.code === 'KeyT') {
     if (!e.repeat) modoEjes = !modoEjes;
+    return;
+  }
+
+  // B: mostrar / ocultar la plaza de toros
+  if (e.code === 'KeyB') {
+    if (!e.repeat) {
+      plaza.visible = !plaza.visible;
+      escena.background.set(plaza.visible ? 0x3b4f7a : 0x0f1420);
+    }
     return;
   }
 
@@ -1310,7 +1954,7 @@ animaciones.push((t) => {
   actualizarVomitos(delta);
 
   // Chuleta se queda junto al comprador mientras Ingrid está de fiesta
-  if (enBar()) ponerCerdoAlLado(delta);
+  if (enBar() || enRescate()) ponerCerdoAlLado(delta);
 
   const k = Math.min(delta * 8, 1);
 
@@ -1318,6 +1962,15 @@ animaciones.push((t) => {
   const dx = robot.position.x - persona.position.x;
   const dz = robot.position.z - persona.position.z;
   const distancia = Math.sqrt(dx * dx + dz * dz);
+
+  // La camioneta entra de reversa por la Puerta Grande cuando Ingrid se cae
+  if (['cae', 'caida', 'auxilio', 'cargan'].includes(estado) && carro.position.x > CARRO_PARQUEO.x) {
+    const falta = carro.position.x - CARRO_PARQUEO.x;
+    const pasoCarro = Math.min(Math.min(11, 2 + falta * 1.2) * delta, falta);
+    carro.position.x -= pasoCarro;
+    ruedas.forEach((r) => { r.rotation.x -= pasoCarro / 0.45; });
+  }
+  const carroListo = carro.position.x <= CARRO_PARQUEO.x + 0.05;
 
   switch (estado) {
 
@@ -1688,6 +2341,113 @@ animaciones.push((t) => {
     case 'caida': {
       persona.rotation.x = Math.PI / 2;
       persona.position.y = 0.35;
+
+      // Después de un rato tirada, sus amigas corren a ayudarla
+      if (tEstado > 2.5) cambiarEstado('auxilio');
+      break;
+    }
+
+    // ---------- Las amigas corren hacia Ingrid ----------
+    case 'auxilio': {
+      persona.rotation.x = Math.PI / 2;
+      persona.position.y = 0.35;
+
+      const llegaron = extras.every((m, i) => {
+        const s = slotRescate(i);
+        return Math.hypot(m.grupo.position.x - s.x, m.grupo.position.z - s.z) < 0.4;
+      });
+
+      // Esperan también a que la camioneta ya esté estacionada
+      if (carroListo && ((llegaron && tEstado > 1) || tEstado > 8)) cambiarEstado('cargan');
+      break;
+    }
+
+    // ---------- La levantan y la cargan hacia la camioneta ----------
+    case 'cargan': {
+      persona.rotation.x = Math.PI / 2;
+
+      // Brazos y piernas le cuelgan
+      hacia(brazoIzq, Math.sin(t * 3) * 0.08, k);
+      hacia(brazoDer, -Math.sin(t * 3) * 0.08, k);
+      hacia(piernaIzq, 0, k);
+      hacia(piernaDer, 0, k);
+
+      // La levantan hasta la altura de las manos
+      const lev = Math.min(tEstado / 1.0, 1);
+      persona.position.y = 0.35 + 0.9 * (lev * lev * (3 - 2 * lev));
+
+      if (tEstado > 1) {
+        // Van hacia la parte de atrás de la camioneta (la caja está abierta ahí)
+        puntoCarro(0, -5.2, _punto);
+
+        let cx = persona.position.x + Math.sin(persona.rotation.y) * LARGO_CUERPO;
+        let cz = persona.position.z + Math.cos(persona.rotation.y) * LARGO_CUERPO;
+
+        const bx = _punto.x - cx;
+        const bz = _punto.z - cz;
+        const d = Math.hypot(bx, bz);
+
+        if (d > 0.3) {
+          persona.rotation.y += difAngulo(persona.rotation.y, Math.atan2(bx, bz)) * Math.min(delta * 3, 1);
+          cx += (bx / d) * 2.2 * delta;
+          cz += (bz / d) * 2.2 * delta;
+
+          persona.position.x = cx - Math.sin(persona.rotation.y) * LARGO_CUERPO;
+          persona.position.z = cz - Math.cos(persona.rotation.y) * LARGO_CUERPO;
+        } else {
+          subeCentro.set(cx, 0, cz);
+          subeGiro = persona.rotation.y;
+          cambiarEstado('sube');
+        }
+      }
+      break;
+    }
+
+    // ---------- La meten a la caja de la camioneta ----------
+    case 'sube': {
+      const u = Math.min(tEstado / 1.5, 1);
+      const s = u * u * (3 - 2 * u);
+
+      puntoCarro(0, -1.8, _punto); // centro de la caja
+
+      const cx = subeCentro.x + (_punto.x - subeCentro.x) * s;
+      const cz = subeCentro.z + (_punto.z - subeCentro.z) * s;
+
+      persona.rotation.x = Math.PI / 2;
+      persona.rotation.y = subeGiro + difAngulo(subeGiro, carro.rotation.y) * s;
+      persona.position.y = 1.25 - 0.1 * s;
+      persona.position.x = cx - Math.sin(persona.rotation.y) * LARGO_CUERPO;
+      persona.position.z = cz - Math.cos(persona.rotation.y) * LARGO_CUERPO;
+
+      if (u >= 1) {
+        velCarro = 0;
+        cambiarEstado('se_va');
+      }
+      break;
+    }
+
+    // ---------- La camioneta se la lleva (por la Puerta Grande) ----------
+    case 'se_va': {
+      velCarro = Math.min(velCarro + 4 * delta, 12);
+
+      carro.position.x += Math.sin(carro.rotation.y) * velCarro * delta;
+      carro.position.z += Math.cos(carro.rotation.y) * velCarro * delta;
+      ruedas.forEach((r) => { r.rotation.x += velCarro * delta * 2.2; });
+
+      // Ingrid viaja acostada en la caja
+      puntoCarro(0, -1.8, _punto);
+      persona.rotation.x = Math.PI / 2;
+      persona.rotation.y = carro.rotation.y;
+      persona.position.y = 1.15;
+      persona.position.x = _punto.x - Math.sin(persona.rotation.y) * LARGO_CUERPO;
+      persona.position.z = _punto.z - Math.cos(persona.rotation.y) * LARGO_CUERPO;
+
+      if (carro.position.x > 60) cambiarEstado('se_fue');
+      break;
+    }
+
+    // ---------- Ya se fueron ----------
+    case 'se_fue': {
       break;
     }
   }
@@ -1715,7 +2475,12 @@ animaciones.push((t) => {
     vomita: 'Ingrid está vomitando...',
     avanza: 'Ingrid camina tambaleándose',
     cae: '¡Ingrid se cae!',
-    caida: 'Ingrid está tirada (R para reiniciar)'
+    caida: 'Ingrid está tirada...',
+    auxilio: 'Sus amigas corren a ayudarla (la camioneta entra de reversa)',
+    cargan: 'Cargan a Ingrid hacia la camioneta',
+    sube: 'Suben a Ingrid a la camioneta',
+    se_va: 'Se llevan a Ingrid',
+    se_fue: 'Se fueron con Ingrid (R para reiniciar)'
   };
   datos['Estado'] = textos[estado];
   datos['Distancia'] = distancia.toFixed(2) + ' metros';
@@ -1756,11 +2521,86 @@ animaciones.push((t) => {
   const k = Math.min(delta * 6, 1);
 
   // Cuando la principal ya atrapó a Chuleta, las demás se enojan (hasta que se van a la mesa)
-  const enojadas = capturado() && !enBar();
+  const enojadas = capturado() && !enBar() && !enRescate();
 
   extras.forEach((m, i) => {
     const g = m.grupo;
     const fase = i * 0.9;
+
+    // ---------- Rescate: la levantan, la cargan y la suben a la camioneta ----------
+    if (enRescate()) {
+      m.tEnojo = 0;
+      m.enojo.visible = false;
+      m.vaso.visible = false;
+      g.rotation.z += (0 - g.rotation.z) * k;
+
+      const kk = Math.min(delta * 14, 1);
+
+      if (estado === 'auxilio' || estado === 'cargan') {
+        const slot = slotRescate(i);
+        const bx = slot.x - g.position.x;
+        const bz = slot.z - g.position.z;
+        const d = Math.hypot(bx, bz);
+
+        if (d > 0.25) {
+          // Corren hacia su lugar (se paran de la mesa)
+          g.rotation.y = Math.atan2(bx, bz);
+          const paso = Math.min(4.5 * delta, d);
+          g.position.x += (bx / d) * paso;
+          g.position.z += (bz / d) * paso;
+
+          const c = Math.sin(t * 14 + fase);
+          hacia(m.piernaIzq, c * 0.8, kk);
+          hacia(m.piernaDer, -c * 0.8, kk);
+          hacia(m.brazoIzq, -c * 0.6, kk);
+          hacia(m.brazoDer, c * 0.6, kk);
+          g.position.y += (Math.abs(c) * 0.07 - g.position.y) * kk;
+        } else {
+          // Ya en su lugar: siguen a Ingrid
+          g.position.x = slot.x;
+          g.position.z = slot.z;
+          g.rotation.y += difAngulo(g.rotation.y, persona.rotation.y) * kk;
+
+          const caminando = estado === 'cargan' && tEstado > 1;
+          const c = caminando ? Math.sin(t * 10 + fase) : 0;
+
+          hacia(m.piernaIzq, c * 0.5, kk);
+          hacia(m.piernaDer, -c * 0.5, kk);
+
+          if (i < 2) {
+            // Las dos que la cargan llevan los brazos abajo, sosteniéndola
+            hacia(m.brazoIzq, -0.3, kk);
+            hacia(m.brazoDer, -0.3, kk);
+          } else {
+            hacia(m.brazoIzq, -c * 0.5, kk);
+            hacia(m.brazoDer, c * 0.5, kk);
+          }
+          g.position.y += (Math.abs(c) * 0.05 - g.position.y) * kk;
+        }
+      } else {
+        // Ya la subieron: se quedan en su lugar y se despiden de la camioneta
+        const haciaCarro = Math.atan2(
+          carro.position.x - g.position.x,
+          carro.position.z - g.position.z
+        );
+        g.rotation.y += difAngulo(g.rotation.y, haciaCarro) * k;
+
+        hacia(m.piernaIzq, 0, kk);
+        hacia(m.piernaDer, 0, kk);
+
+        if (estado === 'sube') {
+          hacia(m.brazoIzq, 0, kk);
+          hacia(m.brazoDer, 0, kk);
+          g.position.y += (0 - g.position.y) * kk;
+        } else {
+          const salto = Math.abs(Math.sin(t * 6 + fase));
+          g.position.y += (salto * 0.12 - g.position.y) * kk;
+          hacia(m.brazoIzq, -Math.PI * 0.85 + Math.sin(t * 10 + fase) * 0.3, kk);
+          hacia(m.brazoDer, -Math.PI * 0.85 + Math.sin(t * 10 + fase + 1.5) * 0.3, kk);
+        }
+      }
+      return;
+    }
 
     // ---------- En la mesa: caminan, se sientan y toman ----------
     if (enBar()) {
